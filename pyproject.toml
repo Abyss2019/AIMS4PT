@@ -33,6 +33,7 @@ dependencies = [
   "keras>=3.12,<3.13",
   "rpy2>=3.6,<3.7",
   "onnxruntime",
+  "rpy2-robjects",
 ]
 
 [project.optional-dependencies]
