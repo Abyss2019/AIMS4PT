@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import math
-from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
 from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from scipy.spatial import ConvexHull, QhullError
 
 from aims4pt.data_tools.rocks import get_TAS_rock_types

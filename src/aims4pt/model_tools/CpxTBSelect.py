@@ -64,6 +64,17 @@ def _validate_input_melt_TAS(input_melt_TAS):
     return deduplicated_fields
 
 
+def _validate_melt_TAS_source(melt_TAS_source):
+    """Validate which melt TAS metadata source should drive petrological checks."""
+    allowed_sources = ("input_liq", "input_melt_TAS")
+    if melt_TAS_source not in allowed_sources:
+        raise ValueError(
+            "melt_TAS_source must be one of "
+            f"{allowed_sources}, got {melt_TAS_source!r}."
+        )
+    return melt_TAS_source
+
+
 class workflow_thermobarometry:
     def __init__(self, model_list, P_T_checker=True, exclude_Putirka2008_models=False):
         """Initialize a thermobarometry model-selection workflow.
@@ -113,6 +124,7 @@ class workflow_thermobarometry:
         input_cpx: pd.DataFrame,
         input_liq: pd.DataFrame = None,
         input_melt_TAS: List[str] = None,
+        melt_TAS_source: str = "input_liq",
     ) -> None:
         """Run per-model prediction and diagnostics for each sample.
 
@@ -126,15 +138,20 @@ class workflow_thermobarometry:
             liquid table containing only ``H2O_liq=0`` is generated for compatibility
             with models that require liquid inputs.
         input_melt_TAS : list of str, optional
-            One to three assumed melt TAS fields used only when ``input_liq`` is not
-            provided. These fields are used for the TAS-field melt-composition OOD
-            check. If omitted together with ``input_liq``, the TAS-field check is
-            skipped. If ``input_liq`` is provided, ``input_melt_TAS`` is ignored
-            because TAS fields are calculated from measured liquid compositions.
+            One to three assumed melt TAS fields used for the TAS-field
+            melt-composition OOD check. By default these fields are used only when
+            ``input_liq`` is not provided. Set ``melt_TAS_source="input_melt_TAS"``
+            to use these fields even when ``input_liq`` is provided.
 
             This parameter does not replace liquid major-element compositions and
             does not create a liquid composition for clinopyroxene-liquid
             thermobarometers. It only supplies TAS-field metadata for the OOD check.
+        melt_TAS_source : {"input_liq", "input_melt_TAS"}, default "input_liq"
+            Metadata source for TAS petrological checks when both ``input_liq`` and
+            ``input_melt_TAS`` are available. ``"input_liq"`` keeps the historical
+            behavior and also checks volcanic series from the liquid composition.
+            ``"input_melt_TAS"`` uses the supplied TAS fields and skips the
+            volcanic-series check.
 
         Returns
         -------
@@ -150,10 +167,11 @@ class workflow_thermobarometry:
         Notes
         -----
         The TAS-field melt-composition OOD check normally uses measured liquid
-        compositions. When no liquid composition is available, users may provide
-        ``input_melt_TAS`` to apply this check using independently constrained or
-        assumed melt TAS fields. If neither ``input_liq`` nor ``input_melt_TAS`` is
-        provided, the TAS-field check is skipped.
+        compositions. Users may set ``melt_TAS_source="input_melt_TAS"`` to apply
+        this check using independently constrained or assumed melt TAS fields while
+        still passing ``input_liq`` for model calculations such as H2O-dependent
+        thermometry. If neither ``input_liq`` nor ``input_melt_TAS`` is provided,
+        the TAS-field check is skipped.
 
         Examples
         --------
@@ -166,6 +184,22 @@ class workflow_thermobarometry:
         >>> pred = wf.decision()
         """
         assumed_melt_TAS = _validate_input_melt_TAS(input_melt_TAS)
+        melt_TAS_source = _validate_melt_TAS_source(melt_TAS_source)
+
+        # Without measured liquid compositions, only cpx-only models can be evaluated reliably.
+        if input_liq is None:
+            invalid_models = [
+                getattr(model, "model_name", type(model).__name__)
+                for model in self.model_list
+                if getattr(model, "cpx_only", False) is not True
+            ]
+            if invalid_models:
+                raise ValueError(
+                    "input_liq is None, but model_list contains cpx-liq models: "
+                    f"{invalid_models}. Provide input_liq or use only models with "
+                    "model.cpx_only == True."
+                )
+
         index = input_cpx.index
 
         # Initialize result DataFrames with aligned index
@@ -179,8 +213,14 @@ class workflow_thermobarometry:
         # Track whether each model has an OOD detector
         has_ood_detector = {}
 
-        # Pre-compute rock types if liq is provided (only once)
-        if input_liq is not None:
+        use_liq_for_petro_check = input_liq is not None and melt_TAS_source == "input_liq"
+        use_input_TAS_for_petro_check = (
+            assumed_melt_TAS is not None
+            and (input_liq is None or melt_TAS_source == "input_melt_TAS")
+        )
+
+        # Pre-compute rock types if liquid metadata drives the petrological check.
+        if use_liq_for_petro_check:
             TAS_rock_type = input_liq.apply(get_TAS_rock_types, axis=1)
             volcanic_rock_series = input_liq.apply(get_volcanic_rock_series, axis=1)
         else:
@@ -225,7 +265,7 @@ class workflow_thermobarometry:
             calculated_deviation_df[model_name] = np.asarray(deviation_values, dtype=float)
 
             # 4) petrological checks (TAS type + volcanic series)
-            if input_liq is not None and hasattr(model, "rock_types") and hasattr(model, "volcanic_rock_series"):
+            if use_liq_for_petro_check and hasattr(model, "rock_types") and hasattr(model, "volcanic_rock_series"):
                 tas_mask = [
                     rock_type_check(rt, model.rock_types, report=False)
                     for rt in TAS_rock_type
@@ -236,7 +276,7 @@ class workflow_thermobarometry:
                 ]
                 petro_mask = [t and s for t, s in zip(tas_mask, series_mask)]
                 petrological_check_df[model_name] = np.asarray(petro_mask, dtype=bool)
-            elif input_liq is None and assumed_melt_TAS is not None and hasattr(model, "rock_types"):
+            elif use_input_TAS_for_petro_check and hasattr(model, "rock_types"):
                 tas_pass = any(
                     rock_type_check(rt, model.rock_types, report=False)
                     for rt in assumed_melt_TAS
@@ -335,7 +375,7 @@ class workflow_thermobarometry:
 
         invalid = (ood_np | tas_ood_np | pt_ood_np).copy()
 
-        # B) NEW RULE: if all detector-equipped models are feature ood for a sample,
+        # B) if all detector-equipped models are feature ood for a sample,
         #              exclude models without detector too (as feature ood).
         if has_detector.any():
             ood_among_detector = ood_np[:, has_detector]             # (n_samples, n_detector_models)
@@ -445,6 +485,7 @@ class workflow_thermobarometry:
         input_cpx: pd.DataFrame,
         input_liq: pd.DataFrame = None,
         input_melt_TAS: List[str] = None,
+        melt_TAS_source: str = "input_liq",
     ) -> pd.Series:
         """Run the full workflow and return final per-sample predictions.
 
@@ -455,11 +496,16 @@ class workflow_thermobarometry:
         input_liq : pd.DataFrame, optional
             Liquid input table aligned to ``input_cpx``.
         input_melt_TAS : list of str, optional
-            One to three assumed melt TAS fields used only when ``input_liq`` is not
-            provided. If ``input_liq`` is provided, this argument is ignored because
-            measured liquid compositions determine TAS fields and volcanic series.
-            The parameter only supplies TAS-field metadata for the OOD check; it
-            does not create liquid oxide compositions.
+            One to three assumed melt TAS fields used for the TAS-field OOD check.
+            Set ``melt_TAS_source="input_melt_TAS"`` to use these fields even when
+            ``input_liq`` is provided. The parameter only supplies TAS-field
+            metadata for the OOD check; it does not create liquid oxide
+            compositions.
+        melt_TAS_source : {"input_liq", "input_melt_TAS"}, default "input_liq"
+            Metadata source for TAS petrological checks when both ``input_liq`` and
+            ``input_melt_TAS`` are available.
+
+            
 
         Returns
         -------
@@ -473,7 +519,12 @@ class workflow_thermobarometry:
         side outputs on the instance (for example ``best_model`` and
         ``failure_reason_df``).
         """
-        self.calculation(input_cpx, input_liq, input_melt_TAS=input_melt_TAS)
+        self.calculation(
+            input_cpx,
+            input_liq,
+            input_melt_TAS=input_melt_TAS,
+            melt_TAS_source=melt_TAS_source,
+        )
         return self.decision()
 
     # ------------------------------------------------------------------
@@ -533,4 +584,3 @@ class workflow_thermobarometry:
         self.model_list = None
 
 
-from aims4pt.reporting.excel import report_excel
