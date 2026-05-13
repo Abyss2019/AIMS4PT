@@ -227,7 +227,7 @@ class workflow_thermobarometry:
             TAS_rock_type = None
             volcanic_rock_series = None
 
-        # If no liq input, create a fake liq input with zeros
+        # If no liq input, create a fake liq input with zeros water
         if input_liq is None:
             input_liq_ = self.get_fake_liq_input(["H2O_liq"], input_cpx)
         else:

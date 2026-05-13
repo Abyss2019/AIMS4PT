@@ -107,7 +107,7 @@ def get_models_initial_pools(T_P: str = "T", method_type: str = "cpx_only", if_h
     Parameters:
         T_P (str): "T" or "P"
         method_type (str): "cpx_only" or "cpx_liq" or "both".
-        if_hydrous (bool): Whether turn on the hydrous mode.
+        if_hydrous (bool): Whether turn on the hydrous mode (only include models that support hydrous or both).
 
     Returns:
         list[model instance]
