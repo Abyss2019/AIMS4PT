@@ -15,14 +15,12 @@ dependencies:
   - matplotlib=3.8
   - seaborn=0.13
   - openpyxl=3.1
-  - plotly=6.6
   - xlsxwriter=3.2
 
 
   # --- ML / statistics (CPU) ---
   - scikit-learn=1.5.1 # version 1.5 to avoid some warnings
   - xgboost=3.2
-  - statsmodels=0.14
   # R-backed models require rpy2 to be ABI-compatible with R.
   # Keep R pinned to the version used for manuscript reproduction.
   - r-base=4.4.3
@@ -44,5 +42,4 @@ dependencies:
       - shap>=0.49,<0.50
       - pyrolite 
       - tensorflow>=2.21,<2.22
-      # - rpy2-robjects
  

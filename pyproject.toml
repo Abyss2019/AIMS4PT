@@ -32,7 +32,6 @@ dependencies = [
   "tensorflow>=2.21,<2.22",
   "keras>=3.12,<3.13",
   "rpy2>=3.6,<3.7",
-  "rpy2-robjects",
   "onnxruntime",
 ]
 
@@ -44,11 +43,6 @@ web = [
 dev = [
   "kneed",
   "shap>=0.49,<0.50",
-  "statsmodels",
-  "ray",
-  "plotly",
-  "dill",
-  "tabulate",
   "ipython",
   "ipykernel",
   "ipywidgets",
