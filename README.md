@@ -65,7 +65,7 @@ If you use this repository or the AIMS4PT_cpx framework, please cite the manuscr
 
 ## Third-Party Code and Packages
 
-This project uses `pyrolite` for Total Alkali–Silica (TAS) classification and TAS-related visualization utilities. Please also cite:
+This project uses `pyrolite` for Total Alkali–Silica (TAS) classification and TAS-related visualization utilities. Users are encouraged to also cite:
 
 > Williams, M. J., Schoneveld, L., Mao, Y., Klump, J., Gosses, J., Dalton, H., Bath, A., & Barnes, S. (2020). pyrolite: Python for geochemistry. Journal of Open Source Software, 5(50), 2314. https://doi.org/10.21105/joss.02314
 
