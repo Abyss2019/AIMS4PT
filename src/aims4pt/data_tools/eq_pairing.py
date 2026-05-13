@@ -1,4 +1,13 @@
 # aims4pt/data_tools/pairing.py
+#
+# Mineral–liquid pairing utilities for AIMS4PT_cpx.
+#
+# Some liquid-mixing routines in this module were adapted in part from Thermobar:
+#
+# Wieser, P., Petrelli, M., Lubbers, J., Wieser, E., Ozaydin, S., Kent, A.,
+# & Till, C. (2022). Thermobar: An open-source Python3 tool for
+# thermobarometry and hygrometry. Volcanica, 5(2), 349–384.
+# https://doi.org/10.30909/vol.05.02.349384
 """
 Mineral–liquid pairing utilities.
 
@@ -177,7 +186,20 @@ def _generate_synthetic_liquids_between(
     random_state: Optional[int] = None,
     allow_self_pair: bool = True,
 ) -> pd.DataFrame:
-    """Sample two liquids A,B within X_liq and generate n_synth synthetic liquids by linear mixing."""
+    """
+    Generate synthetic liquids by linear mixing between sampled liquid compositions.
+
+    For each synthetic liquid, two compositions are sampled from ``X_liq`` and
+    mixed as:
+
+        x_mix = f * x_A + (1 - f) * x_B
+
+    where ``f`` is sampled from either a uniform or beta distribution.
+
+    This implementation was adapted in part from Thermobar
+    (Wieser et al., 2022).
+    
+    """
     if n_synth <= 0:
         return X_liq.iloc[0:0].copy()
 
@@ -227,7 +249,17 @@ def _generate_synthetic_liquids_endmembers(
     beta_b: float = 1.0,
     random_state: Optional[int] = None,
 ) -> pd.DataFrame:
-    """Sample x1 from endmember1 and x2 from endmember2, then generate n_synth synthetic liquids."""
+    """Generate synthetic liquids by linear mixing between two endmember pools.
+
+    For each synthetic liquid, one composition is sampled from ``endmember1`` and
+    one from ``endmember2``. The mixed composition is calculated as:
+
+        x_mix = f * x1 + (1 - f) * x2
+
+    where ``f`` is sampled from either a uniform or beta distribution.
+
+    This implementation was adapted in part from Thermobar
+    (Wieser et al., 2022)."""
     if n_synth <= 0:
         return endmember1.iloc[0:0].copy()
 

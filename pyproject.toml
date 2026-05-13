@@ -41,7 +41,6 @@ dev = [
   "shap>=0.49,<0.50",
   "statsmodels",
   "ray",
-  "thermobar",
   "plotly",
   "dill",
   "tabulate",
