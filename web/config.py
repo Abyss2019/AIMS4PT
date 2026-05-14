@@ -35,9 +35,9 @@ class Settings:
     )
     web_workers_recommended: int = _int_from_env("WEB_WORKERS_RECOMMENDED", 1)
     app_env: str = os.getenv("APP_ENV", "local")
-    enable_r_models: bool = _bool_from_env("AIMS4PT_WEB_ENABLE_R_MODELS", False)
+    enable_r_models: bool = _bool_from_env("AIMS4PT_WEB_ENABLE_R_MODELS", True)
     enable_tensorflow_models: bool = _bool_from_env(
-        "AIMS4PT_WEB_ENABLE_TENSORFLOW_MODELS", False
+        "AIMS4PT_WEB_ENABLE_TENSORFLOW_MODELS", True
     )
 
     @property

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
+from io import BytesIO
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
@@ -10,7 +12,6 @@ from fastapi.responses import StreamingResponse
 from web.routes.shared import base_context, templates
 from web.services.calculation_runner import get_calculation_spec
 from web.services.memory import log_memory
-from web.services.report_builder import write_payload_to_bytes
 from web.services.session_store import get_session
 
 logger = logging.getLogger("web.download")
@@ -46,11 +47,13 @@ async def download_report(request: Request, session_id: str, calculation_key: st
         )
 
     log_memory("before-report-generation")
-    output = write_payload_to_bytes(result.payload)
+    output = BytesIO(result.report_bytes)
+    output.seek(0)
     log_memory("after-report-generation")
 
     spec = get_calculation_spec(calculation_key)
-    filename = f"AIMS4PT_{spec.key}_report.xlsx"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"AIMS4PT_{spec.key}_report_{timestamp}.xlsx"
     logger.info(
         "report_generated session_id=%s calculation=%s", session_id, calculation_key
     )

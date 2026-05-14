@@ -18,6 +18,10 @@ def _format_cell(value: object, column: str) -> str:
             return f"{numeric_value:.0f}"
         if column.startswith("P_"):
             return f"{numeric_value:.1f}"
+        if column == "Mean_calculated_deviation":
+            return f"{numeric_value:.0f}"
+        if column == "OOD_ratio (%)":
+            return f"{numeric_value:.1f}%"
     return str(value)
 
 
@@ -40,14 +44,13 @@ def dataframe_table(df: pd.DataFrame, max_rows: int = 100) -> dict:
 
 def result_view(result: CalculationResult) -> dict:
     """Build the template view for one completed calculation."""
-    payload = result.payload
     return {
         "key": result.key,
         "label": result.label,
         "summary": result.summary,
         "warnings": result.warnings,
-        "model_summary": dataframe_table(payload.model_summary_df),
-        "model_votes": dataframe_table(payload.model_votes_df),
+        "model_summary": dataframe_table(result.model_summary_df),
+        "model_votes": dataframe_table(result.model_votes_df),
     }
 
 

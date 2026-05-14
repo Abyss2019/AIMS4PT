@@ -77,7 +77,7 @@ def _results_summary(workflow_obj: workflow_thermobarometry, target: str) -> pd.
             f"{target}_q3 ({unit})": pred.quantile(0.75, axis=0),
             f"{target}_max ({unit})": pred.max(axis=0),
             "Mean_calculated_deviation": deviation_df.mean(axis=0),
-            "OOD_ratio": ood_mask_df.mean(axis=0),
+            "OOD_ratio (%)": ood_mask_df.mean(axis=0) * 100,
         }
     )
     return results_summary.reset_index().rename(columns={"index": "Model_name"})
@@ -178,6 +178,14 @@ def _format_model_summary_values(df: pd.DataFrame, target: str) -> pd.DataFrame:
         if str(column).startswith(numeric_prefixes):
             formatted[column] = pd.to_numeric(formatted[column], errors="coerce").round(
                 precision
+            )
+        elif column == "Mean_calculated_deviation":
+            formatted[column] = pd.to_numeric(formatted[column], errors="coerce").round(
+                0
+            )
+        elif column == "OOD_ratio (%)":
+            formatted[column] = pd.to_numeric(formatted[column], errors="coerce").round(
+                1
             )
     return formatted
 

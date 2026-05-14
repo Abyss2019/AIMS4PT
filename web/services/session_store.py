@@ -19,7 +19,9 @@ class CalculationResult:
     key: str
     label: str
     summary: str
-    payload: object
+    model_summary_df: pd.DataFrame
+    model_votes_df: pd.DataFrame
+    report_bytes: bytes
     warnings: list[str] = field(default_factory=list)
     completed_at: float = field(default_factory=time.time)
 
@@ -32,6 +34,9 @@ class SessionData:
     validation: ValidationResult
     has_liquid: bool
     created_at: float = field(default_factory=time.time)
+    model_pools: dict[str, list] = field(default_factory=dict)
+    environment_skipped_models: dict[str, list[str]] = field(default_factory=dict)
+    model_pool_errors: dict[str, str] = field(default_factory=dict)
     results: dict[str, CalculationResult] = field(default_factory=dict)
 
     @property
@@ -89,4 +94,3 @@ def expire_sessions() -> None:
     """Force cache expiry during request handling or tests."""
     with _lock:
         _cache.expire()
-

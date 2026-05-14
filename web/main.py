@@ -36,12 +36,14 @@ app.include_router(download.router)
 async def startup_event() -> None:
     """Warm the model registry and emit lightweight memory logs."""
     logging.getLogger("web.main").info(
-        "app_starting env=%s recommended_workers=%s max_upload_mb=%s ttl_seconds=%s max_concurrent_calculations=%s",
+        "app_starting env=%s recommended_workers=%s max_upload_mb=%s ttl_seconds=%s max_concurrent_calculations=%s enable_r_models=%s enable_tensorflow_models=%s",
         settings.app_env,
         settings.web_workers_recommended,
         settings.max_upload_mb,
         settings.session_ttl_seconds,
         settings.max_concurrent_calculations,
+        settings.enable_r_models,
+        settings.enable_tensorflow_models,
     )
     log_memory("startup-before-model-loading")
     ensure_model_registry_loaded()

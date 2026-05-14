@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
 import re
 import threading
@@ -12,6 +13,7 @@ from aims4pt.reporting.excel import build_report_payload
 from web.config import settings
 from web.services.input_validation import CPX_OXIDE_COLUMNS, LIQUID_OXIDE_COLUMNS
 from web.services.memory import log_memory
+from web.services.report_builder import write_payload_to_bytes
 from web.services.session_store import CalculationResult, SessionData
 
 logger = logging.getLogger("web.calculation")
@@ -30,7 +32,7 @@ class CalculationSpec:
 CALCULATION_SPECS = {
     "cpx_only_P": CalculationSpec(
         key="cpx_only_P",
-        label="Cpx-only Pressure",
+        label="Cpx-only barometers",
         target="P",
         method_type="cpx_only",
         requires_liquid=False,
@@ -38,7 +40,7 @@ CALCULATION_SPECS = {
     ),
     "cpx_only_T": CalculationSpec(
         key="cpx_only_T",
-        label="Cpx-only Temperature",
+        label="Cpx-only thermometers",
         target="T",
         method_type="cpx_only",
         requires_liquid=False,
@@ -46,7 +48,7 @@ CALCULATION_SPECS = {
     ),
     "cpx_liq_P": CalculationSpec(
         key="cpx_liq_P",
-        label="Cpx-liquid Pressure",
+        label="Cpx-liquid barometers",
         target="P",
         method_type="cpx_liq",
         requires_liquid=True,
@@ -54,7 +56,7 @@ CALCULATION_SPECS = {
     ),
     "cpx_liq_T": CalculationSpec(
         key="cpx_liq_T",
-        label="Cpx-liquid Temperature",
+        label="Cpx-liquid thermometers",
         target="T",
         method_type="cpx_liq",
         requires_liquid=True,
@@ -110,6 +112,52 @@ def get_calculation_spec(calculation_key: str) -> CalculationSpec:
         raise ValueError("Unsupported calculation type.") from exc
 
 
+def initialize_model_pools_for_session(session: SessionData) -> None:
+    """Create and cache the model objects needed by a validated session."""
+    if not session.validation.is_valid:
+        return
+
+    ensure_model_registry_loaded()
+
+    from aims4pt.model_tools.model_registry import get_models_initial_pools
+
+    specs = [
+        spec
+        for spec in CALCULATION_SPECS.values()
+        if not spec.requires_liquid or session.has_liquid
+    ]
+    log_memory("before-model-pool-initialization")
+    for spec in specs:
+        if spec.key in session.model_pools:
+            continue
+        try:
+            model_pool = get_models_initial_pools(
+                spec.target, spec.method_type, if_hydrous=False
+            )
+            model_pool, environment_skipped_models = _filter_default_disabled_models(
+                model_pool
+            )
+            session.model_pools[spec.key] = model_pool
+            session.environment_skipped_models[spec.key] = environment_skipped_models
+            logger.info(
+                "model_pool_initialized session_id=%s calculation=%s models=%s environment_skipped=%s",
+                session.session_id,
+                spec.key,
+                len(model_pool),
+                len(environment_skipped_models),
+            )
+        except Exception as exc:
+            session.model_pools[spec.key] = []
+            session.model_pool_errors[spec.key] = str(exc)
+            logger.exception(
+                "model_pool_initialization_failed session_id=%s calculation=%s error_type=%s",
+                session.session_id,
+                spec.key,
+                type(exc).__name__,
+            )
+    log_memory("after-model-pool-initialization")
+
+
 async def run_calculation_async(
     session: SessionData,
     calculation_key: str,
@@ -117,6 +165,8 @@ async def run_calculation_async(
 ) -> CalculationResult:
     """Run one calculation under the configured concurrency limit."""
     async with calculation_semaphore:
+        if settings.enable_r_models:
+            return run_calculation(session, calculation_key, melt_tas_fields)
         return await asyncio.to_thread(
             run_calculation, session, calculation_key, melt_tas_fields
         )
@@ -151,14 +201,17 @@ def run_calculation(
         ensure_model_registry_loaded()
 
         from aims4pt.model_tools.CpxTBSelect import workflow_thermobarometry
-        from aims4pt.model_tools.model_registry import get_models_initial_pools
 
-        model_pool = get_models_initial_pools(
-            spec.target, spec.method_type, if_hydrous=False
-        )
-        model_pool, environment_skipped_models = _filter_default_disabled_models(
-            model_pool
-        )
+        if not session.model_pools:
+            initialize_model_pools_for_session(session)
+
+        model_pool = session.model_pools.get(spec.key, [])
+        environment_skipped_models = session.environment_skipped_models.get(spec.key, [])
+        model_pool_error = session.model_pool_errors.get(spec.key)
+        if model_pool_error:
+            raise RuntimeError(
+                f"Model initialization failed for {spec.label}: {model_pool_error}"
+            )
         if not model_pool:
             raise RuntimeError(f"No models are available for {spec.label}.")
 
@@ -170,23 +223,41 @@ def run_calculation(
             spec,
             parsed_tas_fields,
         )
+        session.model_pools[spec.key] = model_pool
 
         payload = build_report_payload(
             workflow_obj=workflow,
             model_list=model_pool,
             original_data=df,
         )
+        model_summary_df = payload.model_summary_df.copy()
+        model_votes_df = payload.model_votes_df.copy()
+        report_output = write_payload_to_bytes(payload)
+        report_bytes = report_output.getvalue()
+        violin_plot_png_missing = payload.violin_plot_png is None
+        del payload
+        del workflow
+        gc.collect()
     finally:
         log_memory(f"after-{spec.memory_suffix}")
 
     validation_warnings = [message.message for message in session.validation.warnings]
     calculation_warnings = []
-    all_skipped_models = [*environment_skipped_models, *skipped_models]
-    if all_skipped_models:
+    if environment_skipped_models:
         calculation_warnings.append(
-            "Some models were skipped because they failed in the current server environment: "
-            + ", ".join(all_skipped_models)
+            "Some optional-backend models were skipped in the current server environment: "
+            + ", ".join(environment_skipped_models)
+            + ". These models require a working R/rpy2 or TensorFlow runtime; set AIMS4PT_WEB_ENABLE_R_MODELS=false or AIMS4PT_WEB_ENABLE_TENSORFLOW_MODELS=false to disable them explicitly."
+        )
+    if skipped_models:
+        calculation_warnings.append(
+            "Some models were skipped because they failed during this calculation run: "
+            + ", ".join(skipped_models)
             + "."
+        )
+    if violin_plot_png_missing and len(df) < 10:
+        calculation_warnings.append(
+            "The violin plot was not added to the report because at least 10 input samples are needed."
         )
     summary = (
         f"{spec.label} completed. Samples: {len(df)} | "
@@ -202,13 +273,15 @@ def run_calculation(
         key=calculation_key,
         label=spec.label,
         summary=summary,
-        payload=payload,
+        model_summary_df=model_summary_df,
+        model_votes_df=model_votes_df,
+        report_bytes=report_bytes,
         warnings=list(dict.fromkeys([*validation_warnings, *calculation_warnings])),
     )
 
 
 def _filter_default_disabled_models(model_pool):
-    """Skip heavy or unavailable optional-backend models by default."""
+    """Skip optional-backend models when disabled or unavailable."""
     model_pool, skipped_tf = _filter_tensorflow_models(model_pool)
     model_pool, skipped_r = _filter_environment_unavailable_models(model_pool)
     return model_pool, [*skipped_tf, *skipped_r]
@@ -310,10 +383,12 @@ def _predict_with_environment_fallback(
         except Exception as exc:
             skipped_models.append(model_name)
             logger.warning(
-                "calculation_model_skipped calculation=%s model=%s error_type=%s",
+                "calculation_model_skipped calculation=%s model=%s error_type=%s error=%s",
                 spec.key,
                 model_name,
                 type(exc).__name__,
+                exc,
+                exc_info=True,
             )
 
     if not working_models:

@@ -42,6 +42,9 @@ web = [
   "uvicorn",
   "jinja2",
   "python-multipart",
+  "pandas>=2.3,<2.4",
+  "openpyxl",
+  "xlsxwriter",
   "cachetools",
   "psutil",
 ]

@@ -5,10 +5,9 @@
 {% block content %}
 <section class="hero-panel mb-4">
   <div>
-    <p class="section-kicker mb-2">AIMS4PT_cpx</p>
-    <h1 class="display-title mb-2">Clinopyroxene P-T calculator</h1>
+    <h1 class="display-title mb-2">AIMS4PT_cpx</h1>
     <p class="hero-copy mb-0">
-      Upload an Excel workbook, validate the composition table, run one calculation at a time, and export a report when ready.
+      A user-friendly web interface for AIMS4PT_cpx, an AI-assisted framework for clinopyroxene-based pressure-temperature estimation.
     </p>
   </div>
   {% if error_message %}
@@ -17,7 +16,7 @@
 </section>
 
 <div class="row g-4 align-items-stretch">
-  <section class="col-lg-7">
+  <section class="col-lg-8">
     <div class="panel h-100">
       <div class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-3">
         <div>
@@ -37,24 +36,5 @@
       </form>
     </div>
   </section>
-  <aside class="col-lg-5">
-    <div class="side-panel h-100">
-      <p class="section-kicker mb-2">Workflow</p>
-      <div class="workflow-list">
-        <div>
-          <span>1</span>
-          <p>Validate workbook structure and readable composition values.</p>
-        </div>
-        <div>
-          <span>2</span>
-          <p>Run only the selected pressure or temperature calculation.</p>
-        </div>
-        <div>
-          <span>3</span>
-          <p>Review compact model summaries and download the matching Excel report.</p>
-        </div>
-      </div>
-    </div>
-  </aside>
 </div>
 {% endblock %}

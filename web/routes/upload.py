@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse
 
 from web.config import settings
 from web.routes.shared import base_context, templates
+from web.services.calculation_runner import initialize_model_pools_for_session
 from web.services.input_validation import validate_workbook_bytes
 from web.services.memory import log_memory
 from web.services.result_views import build_session_context
@@ -59,6 +60,8 @@ async def upload_input(request: Request, file: UploadFile = File(...)):
         validation.has_liquid,
     )
     log_memory("after-input-validation")
+    if validation.is_valid:
+        initialize_model_pools_for_session(session)
 
     context = build_session_context(session)
     return templates.TemplateResponse(
