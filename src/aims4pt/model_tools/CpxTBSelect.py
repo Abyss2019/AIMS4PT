@@ -112,6 +112,9 @@ class workflow_thermobarometry:
         self.best_model = None
         self.best_prediction = None
         self.failure_reason_df = None
+        self.violin_plot_fig = None
+        self.violin_plot_ax = None
+        self.violin_plot_artists = None
 
         if self.exclude_Putirka2008_models:
             self.model_list = [
@@ -486,6 +489,7 @@ class workflow_thermobarometry:
         input_liq: pd.DataFrame = None,
         input_melt_TAS: List[str] = None,
         melt_TAS_source: str = "input_liq",
+        plot: bool = False,
     ) -> pd.Series:
         """Run the full workflow and return final per-sample predictions.
 
@@ -504,6 +508,8 @@ class workflow_thermobarometry:
         melt_TAS_source : {"input_liq", "input_melt_TAS"}, default "input_liq"
             Metadata source for TAS petrological checks when both ``input_liq`` and
             ``input_melt_TAS`` are available.
+        plot : bool, default False
+            Whether to create a violin plot for model predictions after selection.
 
             
 
@@ -525,7 +531,64 @@ class workflow_thermobarometry:
             input_melt_TAS=input_melt_TAS,
             melt_TAS_source=melt_TAS_source,
         )
-        return self.decision()
+        prediction = self.decision()
+        if plot:
+            self._plot_prediction_violin()
+        return prediction
+
+    def _plot_prediction_violin(self):
+        """Create and store a violin plot for plottable model predictions."""
+        from aims4pt.visualization.thermobarometry_plot import violin_plot
+
+        model_uncertainty_dict = {
+            getattr(model, "model_name", type(model).__name__): getattr(
+                model, "uncertainty", None
+            )
+            for model in self.model_list
+        }
+        model_name_list = [
+            getattr(model, "model_name", type(model).__name__) for model in self.model_list
+        ]
+        available_columns = [
+            model_name
+            for model_name in model_name_list
+            if model_name in self.prediction_df
+        ]
+        if not available_columns:
+            self.violin_plot_fig = None
+            self.violin_plot_ax = None
+            self.violin_plot_artists = None
+            return None
+
+        numeric_predictions = self.prediction_df[available_columns].apply(
+            lambda column: pd.to_numeric(column, errors="coerce")
+        )
+        plottable_columns = [
+            column
+            for column in numeric_predictions.columns
+            if numeric_predictions[column].dropna().shape[0] >= 2
+            and numeric_predictions[column].dropna().nunique() >= 2
+        ]
+        if not plottable_columns:
+            self.violin_plot_fig = None
+            self.violin_plot_ax = None
+            self.violin_plot_artists = None
+            return None
+
+        plottable_uncertainty = {
+            model_name: model_uncertainty_dict.get(model_name)
+            for model_name in plottable_columns
+        }
+        fig, ax, artists = violin_plot(
+            numeric_predictions[plottable_columns].copy(),
+            self.T_P,
+            plottable_columns,
+            model_uncertainty=plottable_uncertainty,
+        )
+        self.violin_plot_fig = fig
+        self.violin_plot_ax = ax
+        self.violin_plot_artists = artists
+        return fig, ax, artists
 
     # ------------------------------------------------------------------
     # Custom serialization logic

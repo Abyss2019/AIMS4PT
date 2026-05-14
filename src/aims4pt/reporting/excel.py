@@ -127,7 +127,7 @@ def _build_violin_png(
     plottable_columns = [
         column
         for column in numeric_predictions.columns
-        if numeric_predictions[column].dropna().shape[0] >= 10
+        if numeric_predictions[column].dropna().shape[0] >= 2
         and numeric_predictions[column].dropna().nunique() >= 2
     ]
     if not plottable_columns:

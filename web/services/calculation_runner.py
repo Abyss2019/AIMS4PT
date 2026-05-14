@@ -7,6 +7,7 @@ import gc
 import logging
 import re
 import threading
+import time
 from dataclasses import dataclass
 
 from aims4pt.reporting.excel import build_report_payload
@@ -117,6 +118,7 @@ def initialize_model_pools_for_session(session: SessionData) -> None:
     if not session.validation.is_valid:
         return
 
+    started_at = time.perf_counter()
     ensure_model_registry_loaded()
 
     from aims4pt.model_tools.model_registry import get_models_initial_pools
@@ -155,7 +157,14 @@ def initialize_model_pools_for_session(session: SessionData) -> None:
                 spec.key,
                 type(exc).__name__,
             )
+    elapsed_seconds = time.perf_counter() - started_at
     log_memory("after-model-pool-initialization")
+    logger.info(
+        "model_pool_initialization_completed session_id=%s calculations=%s elapsed_seconds=%.2f",
+        session.session_id,
+        len(specs),
+        elapsed_seconds,
+    )
 
 
 async def run_calculation_async(
@@ -179,6 +188,7 @@ def run_calculation(
 ) -> CalculationResult:
     """Run one completed AIMS4PT workflow and build its report payload."""
     spec = get_calculation_spec(calculation_key)
+    started_at = time.perf_counter()
 
     if not session.validation.is_valid or session.cleaned_df is None:
         raise ValueError("Input validation has not passed.")
@@ -264,10 +274,11 @@ def run_calculation(
         f"Models: {len(model_pool)} | Report: ready"
     )
     logger.info(
-        "calculation_completed session_id=%s calculation=%s rows=%s",
+        "calculation_completed session_id=%s calculation=%s rows=%s elapsed_seconds=%.2f",
         session.session_id,
         calculation_key,
         len(df),
+        time.perf_counter() - started_at,
     )
     return CalculationResult(
         key=calculation_key,
@@ -352,16 +363,17 @@ def _predict_with_environment_fallback(
     def predict_pool(pool):
         workflow = workflow_cls(pool)
         if spec.requires_liquid:
-            workflow.predict(x_cpx, x_liq)
+            workflow.predict(x_cpx, x_liq, plot=False)
         elif x_liq is None:
             workflow.predict(
                 x_cpx,
                 None,
                 input_melt_TAS=parsed_tas_fields,
                 melt_TAS_source="input_melt_TAS",
+                plot=False,
             )
         else:
-            workflow.predict(x_cpx, x_liq)
+            workflow.predict(x_cpx, x_liq, plot=False)
         return workflow
 
     try:

@@ -166,7 +166,8 @@ clinopyroxene_SiO2	clinopyroxene_Al2O3	clinopyroxene_TiO2	clinopyroxene_CaO	clin
             robjects.globalenv["input"] = pandas2ri.py2rpy(X_input)
 
         Oxi_Weight_path = get_file_path(higgins_data, "model/OxiWeight.Rdata")
-        robjects.r['load'](str(Oxi_Weight_path))
+        with localconverter(default_converter + pandas2ri.converter):
+            robjects.r['load'](str(Oxi_Weight_path))
 
         robjects.r(
         r'''
@@ -209,7 +210,8 @@ clinopyroxene_SiO2	clinopyroxene_Al2O3	clinopyroxene_TiO2	clinopyroxene_CaO	clin
         )
 
         # load the R models
-        robjects.r['load'](str(self.r_model_path))
+        with localconverter(default_converter + pandas2ri.converter):
+            robjects.r['load'](str(self.r_model_path))
         # predict
         robjects.r(r'''
         id.cats <- c("Si", "Al", "Ti", "Ca", "Na", "Fe", "Mg", "Mn", "Cr")
@@ -221,10 +223,10 @@ clinopyroxene_SiO2	clinopyroxene_Al2O3	clinopyroxene_TiO2	clinopyroxene_CaO	clin
             dat$T <- round(apply(T, 1, median), 0)
             dat$T_uncer <- round(apply(T,1,IQR),0)/2
             ''')
-            # to np.ndarray
-            dat = robjects.globalenv['dat']
-            T_col = dat.rx2('T')           # Equivalent to dat$T.
-            prediction = np.array(T_col)   # Convert to a NumPy array.
+            # Convert the R vector directly; converting the whole data frame can
+            # turn it into pandas and remove R-specific accessors such as rx2().
+            with localconverter(default_converter + pandas2ri.converter):
+                prediction = np.asarray(robjects.r("dat$T"), dtype=float)
 
         else:
             robjects.r(r'''
@@ -233,10 +235,10 @@ clinopyroxene_SiO2	clinopyroxene_Al2O3	clinopyroxene_TiO2	clinopyroxene_CaO	clin
             dat$P_uncer <- round(apply(P,1,IQR),1)/2
             ''')
 
-            # to np.ndarray
-            dat = robjects.globalenv['dat']
-            P_col = dat.rx2('P')           # Equivalent to dat$P.
-            prediction = np.array(P_col)   # Convert to a NumPy array.
+            # Convert the R vector directly; converting the whole data frame can
+            # turn it into pandas and remove R-specific accessors such as rx2().
+            with localconverter(default_converter + pandas2ri.converter):
+                prediction = np.asarray(robjects.r("dat$P"), dtype=float)
 
         # to pd.Series
         prediction = pd.Series(prediction, name=self.prediction_column_name, index=X_cpx.index)

@@ -4,15 +4,18 @@ A user-friendly web interface for AIMS4PT_cpx, an AI-assisted framework for clin
 
 ## Local Run
 
-```bash
-uvicorn web.main:app --host 127.0.0.1 --port 8003 --workers 1
-```
-
 Install web dependencies with:
 
 ```bash
 pip install -e ".[web]"
 ```
+
+Then run the server locally with:
+
+```bash
+uvicorn web.main:app --host 127.0.0.1 --port 8003 --workers 1
+```
+
 
 Configuration is read from environment variables:
 
@@ -31,4 +34,3 @@ export AIMS4PT_WEB_ENABLE_R_MODELS=false
 export AIMS4PT_WEB_ENABLE_TENSORFLOW_MODELS=false
 ```
 
-Uploaded workbooks, generated reports, and calculation results are kept in memory only. Reports are generated on demand from the current session cache.

@@ -350,8 +350,9 @@ class Jorgenson22(ModelManager):
 
     def _load_r_model(self) -> None:
         _ensure_rpy2_runtime()
-        robjects.r["load"](str(self.r_model_path))
-        self._r_model = robjects.globalenv[self._r_model_symbol]
+        with localconverter(default_converter):
+            robjects.r["load"](str(self.r_model_path))
+            self._r_model = robjects.globalenv[self._r_model_symbol]
 
     # ------------------------------------------------------------------
     # Input handling
@@ -409,14 +410,15 @@ class Jorgenson22(ModelManager):
 
         with localconverter(default_converter + pandas2ri.converter):
             input_r = pandas2ri.py2rpy(X_input)
-        pred = robjects.r["predict"](
-            self._r_model,
-            newdata=input_r,
-            allValues=True,
-        )
 
-        with localconverter(default_converter + pandas2ri.converter):
+        with localconverter(default_converter):
+            pred = robjects.r["predict"](
+                self._r_model,
+                newdata=input_r,
+                allValues=True,
+            )
             pred_obj = robjects.r["as.data.frame"](pred)
+        with localconverter(default_converter + pandas2ri.converter):
             pred_df = (
                 pred_obj
                 if isinstance(pred_obj, pd.DataFrame)
