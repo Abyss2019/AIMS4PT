@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import io
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, BinaryIO
 
 import pandas as pd
 
@@ -11,131 +12,277 @@ if TYPE_CHECKING:
     from aims4pt.model_tools.CpxTBSelect import workflow_thermobarometry
     from aims4pt.model_tools.ModelManager import ModelManager
 
-def report_excel(workflow_obj: workflow_thermobarometry, model_list: list[ModelManager], original_data: pd.DataFrame, out_path: str) -> None:
-    """Export workflow results to a multi-sheet Excel report.
 
-    Parameters
-    ----------
-    workflow_obj : workflow_thermobarometry
-        Workflow instance that has already run prediction/selection. This function
-        reads cached outputs such as ``prediction_df``, ``ood_mask_df``,
-        ``calculated_deviation_df``, ``failure_reason_df``, and ``best_model``.
-    model_list : list[ModelManager]
-        Models included in the report summary and violin-plot uncertainty annotation.
-    original_data : pd.DataFrame
-        Original input dataset to be included in the report. Should align row-wise
-        with ``workflow_obj.prediction_df``.
-    out_path : str
-        Output ``.xlsx`` file path.
+@dataclass
+class ReportPayload:
+    """Reusable report data shared by Excel export and lightweight web views."""
 
-    Returns
-    -------
-    None
+    results_sheet: pd.DataFrame
+    model_summary_df: pd.DataFrame
+    model_votes_df: pd.DataFrame
+    ranking_details_df: pd.DataFrame
+    violin_plot_png: bytes | None
+    target: str
 
-    Report Structure
-    ----------------
-    ``Results`` sheet:
-        Original input columns plus per-model predictions.
 
-    ``Model Summary`` sheet:
-        Model metadata, prediction statistics, OOD ratio, model vote counts,
-        and an embedded violin plot.
+def _model_summary_row(model: ModelManager, target: str) -> dict:
+    """Build one metadata row for a thermobarometry model."""
+    unit = "kbar" if target == "P" else "C"
+    x_cpx_training = getattr(model, "X_cpx_training", None)
+    x_cpx_all = getattr(model, "X_cpx_all", None)
+    rock_types = getattr(model, "rock_types", None)
 
-    ``Ranking Details`` sheet:
-        Per-sample/per-model failure reason table and selected model label.
+    comp_range = None
+    if x_cpx_training is not None and hasattr(model, "export_composition_range"):
+        comp_range = model.export_composition_range("training", False, True, "text")
 
-    Notes
-    -----
-    The function expects ``workflow_obj`` to be fully populated (for example via
-    ``workflow_obj.predict(...)``) before export.
-    """
+    if x_cpx_training is not None:
+        value_range = (
+            f"{getattr(model, 'y_min', 'not available')}-"
+            f"{getattr(model, 'y_max', 'not available')}"
+        )
+    else:
+        value_range = "not available"
 
-    # sheet 1: Results 
-    results_sheet = pd.concat([original_data.reset_index(drop=True), workflow_obj.prediction_df.reset_index(drop=True)], axis=1)
-    results_sheet_col = pd.MultiIndex.from_product([["Original Data"], original_data.columns]).append(
-        pd.MultiIndex.from_product([["Model Predictions"], workflow_obj.prediction_df.columns])
+    return {
+        "Model_name": getattr(model, "model_name", type(model).__name__),
+        "Num_calibration_experiments": len(x_cpx_all)
+        if x_cpx_all is not None
+        else "not available",
+        "Composition_range (wt%)": comp_range if comp_range else "not available",
+        f"{target}_range ({unit})": value_range,
+        "Supported_TAS_rock_types": rock_types
+        if rock_types is not None
+        else "not available",
+    }
+
+
+def _results_summary(workflow_obj: workflow_thermobarometry, target: str) -> pd.DataFrame:
+    """Summarize prediction, OOD, and deviation outputs by model."""
+    pred = workflow_obj.prediction_df
+    deviation_df = workflow_obj.calculated_deviation_df
+    ood_mask_df = workflow_obj.ood_mask_df
+    unit = "kbar" if target == "P" else "C"
+
+    if deviation_df is None:
+        deviation_df = pd.DataFrame(index=pred.index, columns=pred.columns, dtype=float)
+    if ood_mask_df is None:
+        ood_mask_df = pd.DataFrame(False, index=pred.index, columns=pred.columns)
+
+    results_summary = pd.DataFrame(
+        {
+            f"{target}_min ({unit})": pred.min(axis=0),
+            f"{target}_q1 ({unit})": pred.quantile(0.25, axis=0),
+            f"{target}_median ({unit})": pred.median(axis=0),
+            f"{target}_q3 ({unit})": pred.quantile(0.75, axis=0),
+            f"{target}_max ({unit})": pred.max(axis=0),
+            "Mean_calculated_deviation": deviation_df.mean(axis=0),
+            "OOD_ratio": ood_mask_df.mean(axis=0),
+        }
+    )
+    return results_summary.reset_index().rename(columns={"index": "Model_name"})
+
+
+def _model_votes(workflow_obj: workflow_thermobarometry) -> pd.DataFrame:
+    """Count selected best-model labels and append a Total row."""
+    votes = workflow_obj.get_best_model_series().value_counts(dropna=False)
+    votes_df = votes.rename_axis("Model_name").reset_index(name="Votes count")
+    votes_df["Model_name"] = votes_df["Model_name"].where(
+        votes_df["Model_name"].notna(), "No selected model"
+    )
+    total = pd.DataFrame(
+        [{"Model_name": "Total", "Votes count": int(votes_df["Votes count"].sum())}]
+    )
+    return pd.concat([votes_df, total], ignore_index=True)
+
+
+def _build_violin_png(
+    workflow_obj: workflow_thermobarometry,
+    model_list: list[ModelManager],
+    target: str,
+) -> bytes | None:
+    """Render the existing violin plot to PNG bytes for Excel insertion."""
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
+    from aims4pt.visualization.thermobarometry_plot import violin_plot
+
+    model_uncertainty_dict = {
+        getattr(model, "model_name", type(model).__name__): getattr(
+            model, "uncertainty", None
+        )
+        for model in model_list
+    }
+    model_name_list = [
+        getattr(model, "model_name", type(model).__name__) for model in model_list
+    ]
+    available_columns = [
+        model_name for model_name in model_name_list if model_name in workflow_obj.prediction_df
+    ]
+    numeric_predictions = workflow_obj.prediction_df[available_columns].apply(
+        lambda column: pd.to_numeric(column, errors="coerce")
+    )
+    if numeric_predictions.empty:
+        return None
+    plottable_columns = [
+        column
+        for column in numeric_predictions.columns
+        if numeric_predictions[column].dropna().shape[0] >= 10
+        and numeric_predictions[column].dropna().nunique() >= 2
+    ]
+    if not plottable_columns:
+        return None
+    plottable_uncertainty = {
+        model_name: model_uncertainty_dict.get(model_name)
+        for model_name in plottable_columns
+    }
+
+    try:
+        violin_fig, _, _ = violin_plot(
+            numeric_predictions[plottable_columns].copy(),
+            target,
+            plottable_columns,
+            model_uncertainty=plottable_uncertainty,
+        )
+    except Exception:
+        return None
+
+    imgdata = io.BytesIO()
+    violin_fig.savefig(imgdata, format="png", bbox_inches="tight", dpi=200)
+    try:
+        import matplotlib.pyplot as plt
+
+        plt.close(violin_fig)
+    except Exception:
+        pass
+    return imgdata.getvalue()
+
+
+def _format_model_summary_values(df: pd.DataFrame, target: str) -> pd.DataFrame:
+    """Drop heavy metadata columns and format numeric summary columns."""
+    excluded_columns = {
+        "Num_calibration_experiments",
+        "Composition_range (wt%)",
+        "P_range",
+        "T_range (C)",
+        f"{target}_range ({'kbar' if target == 'P' else 'C'})",
+        "Supported_TAS_rock_types",
+    }
+    formatted = df.drop(
+        columns=[column for column in excluded_columns if column in df.columns]
+    ).copy()
+
+    precision = 1 if target == "P" else 0
+    numeric_prefixes = (f"{target}_min", f"{target}_q1", f"{target}_median", f"{target}_q3", f"{target}_max")
+    for column in formatted.columns:
+        if str(column).startswith(numeric_prefixes):
+            formatted[column] = pd.to_numeric(formatted[column], errors="coerce").round(
+                precision
+            )
+    return formatted
+
+
+def build_report_payload(
+    workflow_obj: workflow_thermobarometry,
+    model_list: list[ModelManager],
+    original_data: pd.DataFrame,
+) -> ReportPayload:
+    """Build reusable report tables and figure bytes from a completed workflow."""
+    if not model_list:
+        raise ValueError("Cannot build a report without models.")
+    if workflow_obj.prediction_df is None or workflow_obj.prediction_df.empty:
+        raise ValueError("Cannot build a report before predictions are available.")
+
+    target = getattr(model_list[0], "T_P", getattr(workflow_obj, "T_P", ""))
+
+    results_sheet = pd.concat(
+        [
+            original_data.reset_index(drop=True),
+            workflow_obj.prediction_df.reset_index(drop=True),
+        ],
+        axis=1,
+    )
+    results_sheet_col = pd.MultiIndex.from_product(
+        [["Original Data"], original_data.columns]
+    ).append(
+        pd.MultiIndex.from_product(
+            [["Model Predictions"], workflow_obj.prediction_df.columns]
+        )
     )
     results_sheet.columns = results_sheet_col
 
-    # sheet 2: models summary 
-    # a multi-level DataFrame summarizing model details and results summary
-    model_summaries = []
-    T_P = model_list[0].T_P
-    unit = "kbar" if T_P == "P" else "°C"
-    for model in model_list:
-        comp_range = None
-        if model.X_cpx_training is not None:
-            comp_range = model.export_composition_range("training", False, True, "text")
-        summary = {
-            "Model_name": model.model_name,
-            "Num_calibration_experiments": len(model.X_cpx_all) if model.X_cpx_all is not None else "not available",
-            "Composition_range (wt%)": comp_range if comp_range else "not available",
-            f"{T_P}_range ({unit})" : f"{model.y_min}-{model.y_max}" if model.X_cpx_training is not None else "not available",                         
-            "Supported_TAS_rock_types": model.rock_types if model.rock_types is not None else "not available",
-        }
-        model_summaries.append(summary)
-    model_summary_df = pd.DataFrame(model_summaries)
+    model_metadata_df = pd.DataFrame(
+        [_model_summary_row(model, target) for model in model_list]
+    )
+    results_summary_df = _results_summary(workflow_obj, target)
+    model_summary_df = pd.concat(
+        [
+            model_metadata_df.set_index("Model_name"),
+            results_summary_df.set_index("Model_name"),
+        ],
+        axis=1,
+    ).reset_index()
+    model_summary_df = _format_model_summary_values(model_summary_df, target)
 
-    # results summary
-    pred = workflow_obj.prediction_df  # shape: (n_samples, n_models)
-
-    results_summary = pd.DataFrame({
-        f"{T_P}_min ({'kbar' if T_P=='P' else 'C'})": pred.min(axis=0),
-        f"{T_P}_q1 ({'kbar' if T_P=='P' else 'C'})": pred.quantile(0.25, axis=0),
-        f"{T_P}_median ({'kbar' if T_P=='P' else 'C'})": pred.median(axis=0),
-        f"{T_P}_q3 ({'kbar' if T_P=='P' else 'C'})": pred.quantile(0.75, axis=0),
-        f"{T_P}_max ({'kbar' if T_P=='P' else 'C'})": pred.max(axis=0),
-        "Mean_calculated_deviation": workflow_obj.calculated_deviation_df.mean(axis=0),
-    })
-
-    results_summary = results_summary.reset_index().rename(columns={"index": "Model_name"})
-
-    ood_ratio  = workflow_obj.ood_mask_df.mean(axis=0)
-
-
-    results_summary["OOD_ratio"] = ood_ratio.values
-
-
-    model_votes_df = workflow_obj.get_best_model_series().value_counts(dropna=False)
-    model_votes_df.columns = ["Votes count"]
-    # add a line total number of samples
-    model_votes_df.loc["Total"] = model_votes_df.sum()
-
-    from aims4pt.visualization.thermobarometry_plot import violin_plot
-
-    model_uncertainty_dict = {model.model_name: model.uncertainty for model in model_list}
-    model_name_list = [model.model_name for model in model_list]
-    violin_fig, _, _ = violin_plot(workflow_obj.prediction_df, T_P, model_name_list, model_uncertainty=model_uncertainty_dict)
-
-    # sheet 3: ranking details
+    model_votes_df = _model_votes(workflow_obj)
     failure_reason_df = workflow_obj.failure_reason_df
     selected_models_series = workflow_obj.get_best_model_series()
-    ranking_details_df = pd.concat([failure_reason_df, selected_models_series.rename("Selected_model")], axis=1)
+    ranking_details_df = pd.concat(
+        [failure_reason_df, selected_models_series.rename("Selected_model")], axis=1
+    )
+    violin_plot_png = _build_violin_png(workflow_obj, model_list, target)
+
+    return ReportPayload(
+        results_sheet=results_sheet,
+        model_summary_df=model_summary_df,
+        model_votes_df=model_votes_df,
+        ranking_details_df=ranking_details_df,
+        violin_plot_png=violin_plot_png,
+        target=target,
+    )
 
 
-    # create a new Excel writer
-    with pd.ExcelWriter(out_path, engine='xlsxwriter') as writer:
-        # write results sheet
-        results_sheet.to_excel(writer, sheet_name='Results', index=True)
+def write_report_excel(payload: ReportPayload, output: str | BinaryIO | io.BytesIO) -> None:
+    """Write an Excel report to a filesystem path or in-memory file object."""
+    if payload.results_sheet.empty or payload.model_summary_df.empty:
+        raise ValueError("Cannot generate an empty report.")
 
-        model_results_sum_df = pd.concat([model_summary_df.set_index('Model_name'), results_summary.set_index('Model_name')], axis=1).reset_index()
-        # write model summary sheet
-        model_results_sum_df.to_excel(writer, sheet_name='Model Summary', index=False)
+    with pd.ExcelWriter(
+        output,
+        engine="xlsxwriter",
+        engine_kwargs={"options": {"in_memory": True}},
+    ) as writer:
+        payload.results_sheet.to_excel(writer, sheet_name="Results", index=True)
+        payload.model_summary_df.to_excel(writer, sheet_name="Model Summary", index=False)
 
-        # write model votes summary
-        model_votes_df.to_excel(writer, sheet_name='Model Summary', index=True, startrow=len(model_results_sum_df)+3, float_format="%.2f")
+        vote_start_row = len(payload.model_summary_df) + 3
+        payload.model_votes_df.to_excel(
+            writer,
+            sheet_name="Model Summary",
+            index=False,
+            startrow=vote_start_row,
+            float_format="%.2f",
+        )
 
-        # write violin plot
-        worksheet = writer.sheets['Model Summary']
-        # save the figure to a BytesIO object
-        import io 
-        imgdata = io.BytesIO()
-        violin_fig.savefig(imgdata, format='png', bbox_inches='tight', dpi=200)
-        imgdata.seek(0)
-        # insert the image into the worksheet
-        worksheet.insert_image('E11', 'violin_plot.png', {'image_data': imgdata})
+        worksheet = writer.sheets["Model Summary"]
+        if payload.violin_plot_png:
+            worksheet.insert_image(
+                "E11",
+                "violin_plot.png",
+                {"image_data": io.BytesIO(payload.violin_plot_png)},
+            )
 
-        ranking_details_df.to_excel(writer, sheet_name='Ranking Details', index=True)
+        payload.ranking_details_df.to_excel(
+            writer, sheet_name="Ranking Details", index=True
+        )
 
 
-    return None
+def report_excel(
+    workflow_obj: workflow_thermobarometry,
+    model_list: list[ModelManager],
+    original_data: pd.DataFrame,
+    out_path: str | BinaryIO | io.BytesIO,
+) -> None:
+    """Export workflow results to a multi-sheet Excel report."""
+    payload = build_report_payload(workflow_obj, model_list, original_data)
+    write_report_excel(payload, out_path)

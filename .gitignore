@@ -105,7 +105,20 @@ Thumbs.db
 *.log
 local_outputs/
 outputs/
+uploads/
+reports/
+cache/
+logs/
+report_output/
 figures/tmp/
+*.pkl
+*.pickle
+
+# Keep official packaged model resources available for versioning.
+!src/aims4pt/model_tools/trained_model/**/*.pkl
+!src/aims4pt/model_tools/trained_model/**/*.pickle
+!src/aims4pt/model_tools/data/**/*.pkl
+!src/aims4pt/model_tools/data/**/*.pickle
 
 # -----------------------------
 # Data policy
@@ -159,7 +172,4 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# IMPORTANT:
-# Do not globally ignore *.pkl or *.joblib here.
-# Official AIMS4PT trained resources under src/aims4pt/model_tools/trained_model/
-# may include serialized OOD detectors, deviation functions, and SHAP results.
+# Official AIMS4PT trained resources are explicitly unignored above.

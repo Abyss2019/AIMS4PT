@@ -1,0 +1,86 @@
+<section class="panel">
+  <div class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-3">
+    <div>
+      <p class="section-kicker mb-1">Step 3</p>
+      <h2 class="h5 mb-1">Calculations</h2>
+      <p class="text-secondary mb-0">Run one calculation at a time. Reports become available after completion.</p>
+    </div>
+  </div>
+  {% if not session.has_liquid %}
+    <div class="alert alert-warning" role="alert">
+      Clinopyroxene-liquid calculations are unavailable because no liquid composition was provided.
+    </div>
+  {% endif %}
+  <form method="post">
+    {% if not session.has_liquid %}
+      <div class="mb-3">
+        <label for="melt_tas_fields" class="form-label">Likely melt-composition field</label>
+        <input
+          class="form-control"
+          id="melt_tas_fields"
+          name="melt_tas_fields"
+          value="Basalt, Andesite"
+          list="tas-field-options"
+          autocomplete="off">
+        <datalist id="tas-field-options">
+          <option value="Picrite"></option>
+          <option value="Basalt"></option>
+          <option value="Basaltic Andesite"></option>
+          <option value="Andesite"></option>
+          <option value="Dacite"></option>
+          <option value="Rhyolite"></option>
+          <option value="Foidite"></option>
+          <option value="Trachyte"></option>
+          <option value="Trachybasalt"></option>
+          <option value="Basaltic Trachyandesite"></option>
+          <option value="Trachyandesite"></option>
+          <option value="Phonotephrite"></option>
+          <option value="Tephriphonolite"></option>
+          <option value="Phonolite"></option>
+        </datalist>
+      </div>
+    {% endif %}
+
+    <div class="table-responsive">
+      <table class="table table-sm align-middle action-table mb-0">
+        <thead class="table-light">
+          <tr>
+            <th scope="col">Calculation</th>
+            <th scope="col">Run</th>
+            <th scope="col">Report</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for spec in calculation_specs %}
+            {% set report_ready = spec.key in session.results %}
+            {% set liquid_blocked = spec.requires_liquid and not session.has_liquid %}
+            <tr>
+              <td>
+                <div class="fw-semibold">{{ spec.label }}</div>
+                {% if liquid_blocked %}
+                  <div class="text-secondary small">Liquid composition is unavailable.</div>
+                {% endif %}
+              </td>
+              <td>
+                <button
+                  class="btn btn-primary btn-sm"
+                  type="submit"
+                  formaction="/calculate/{{ session.session_id }}/{{ spec.key }}"
+                  {% if liquid_blocked %}disabled{% endif %}>
+                  Run
+                </button>
+              </td>
+              <td>
+                {% if report_ready %}
+                  <a class="btn btn-outline-success btn-sm" href="/download/{{ session.session_id }}/{{ spec.key }}">Download report</a>
+                {% else %}
+                  <button class="btn btn-outline-secondary btn-sm" type="button" disabled>Download report</button>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </form>
+</section>

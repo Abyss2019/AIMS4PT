@@ -38,7 +38,12 @@ dependencies = [
 
 [project.optional-dependencies]
 web = [
-  "streamlit",
+  "fastapi",
+  "uvicorn",
+  "jinja2",
+  "python-multipart",
+  "cachetools",
+  "psutil",
 ]
 
 dev = [

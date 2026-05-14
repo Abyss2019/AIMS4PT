@@ -1,0 +1,65 @@
+<article class="result-panel mb-4">
+  <div class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-3">
+    <div>
+      <p class="section-kicker mb-1">Completed calculation</p>
+      <h3 class="h5 mb-1">{{ result.label }}</h3>
+      <p class="summary-line mb-0">{{ result.summary }}</p>
+    </div>
+    <a class="btn btn-success btn-sm" href="/download/{{ session.session_id }}/{{ result.key }}">Download report</a>
+  </div>
+
+  {% if result.warnings %}
+    <div class="alert alert-warning py-2" role="alert">
+      {% for warning in result.warnings %}
+        <div>{{ warning }}</div>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  <h4 class="table-title">Model Summary</h4>
+  <div class="table-responsive table-scroll">
+    <table class="table table-sm table-striped table-bordered align-middle">
+      <thead class="table-light">
+        <tr>
+          {% for column in result.model_summary.columns %}
+            <th scope="col">{{ column }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in result.model_summary.rows %}
+          <tr>
+            {% for value in row %}
+              <td>{{ value }}</td>
+            {% endfor %}
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if result.model_summary.truncated %}
+    <p class="text-secondary small">Showing {{ result.model_summary.shown }} of {{ result.model_summary.total }} rows.</p>
+  {% endif %}
+
+  <h4 class="table-title mt-3">Best Model / vote-count</h4>
+  <div class="table-responsive votes-table">
+    <table class="table table-sm table-bordered align-middle">
+      <thead class="table-light">
+        <tr>
+          {% for column in result.model_votes.columns %}
+            <th scope="col">{{ column }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in result.model_votes.rows %}
+          <tr>
+            {% for value in row %}
+              <td>{{ value }}</td>
+            {% endfor %}
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</article>

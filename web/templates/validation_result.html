@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}AIMS4PT_cpx Session{% endblock %}
+
+{% block content %}
+{% if error_message %}
+  <div class="alert alert-danger" role="alert">{{ error_message }}</div>
+{% endif %}
+
+<section class="panel mb-4">
+  <div class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-3">
+    <div>
+      <p class="section-kicker mb-1">Step 2</p>
+      <h1 class="h4 mb-1">Input validation</h1>
+      {% if validation.is_valid %}
+        <p class="text-secondary mb-0">Input passed validation. Review warnings before running calculations.</p>
+      {% else %}
+        <p class="text-secondary mb-0">Input validation failed. Please fix the errors below and upload the file again.</p>
+      {% endif %}
+    </div>
+    <a class="btn btn-outline-secondary" href="/">Upload another file</a>
+  </div>
+  {% include "validation_table.html" %}
+</section>
+
+{% if validation.is_valid %}
+  {% include "calculation_panel.html" %}
+{% endif %}
+
+{% if results %}
+  <section class="mt-4">
+    <h2 class="h5 mb-3">Completed calculations</h2>
+    {% for result in results %}
+      {% include "result_panel.html" %}
+    {% endfor %}
+  </section>
+{% endif %}
+{% endblock %}
