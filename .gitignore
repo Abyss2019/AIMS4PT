@@ -1,7 +1,7 @@
 # ============================================================
 # AIMS4PT .gitignore
 # ============================================================
-
+.gitignore
 # -----------------------------
 # Python bytecode / cache
 # -----------------------------
@@ -144,10 +144,12 @@ data/external/
 # Kept locally for private analysis or manuscript comparison only.
 # These files are not part of the public AIMS4PT_cpx package and should not be
 # imported by the default model registry.
-src\aims4pt\model_tools\local_models\eruption_classification.py
-src\aims4pt\model_tools\local_models\Gu26.py
-src\aims4pt\model_tools\local_models\LandZ24_bt.py
-src\aims4pt\model_tools\local_models\Putirka_08_pl.py
+src/aims4pt/model_tools/local_models/eruption_classification.py
+src/aims4pt/model_tools/local_models/Gu26.py
+src/aims4pt/model_tools/local_models/LandZ24_bt.py
+src/aims4pt/model_tools/local_models/Putirka_08_pl.py
+
+
 
 /src/aims4pt/data_tools/excel_processor.py
 /paper/data/merapi_literature_P.xlsx
