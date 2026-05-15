@@ -64,6 +64,8 @@ Then run the server locally with:
 uvicorn web.main:app --host 127.0.0.1 --port 8003
 ```
 
+Open a browser and navigate to `http://127.0.0.1:8003 ` to access the interface.
+
 The port can be changed as needed.
 
 ## Development and Reproduction
