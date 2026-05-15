@@ -1,6 +1,6 @@
 # AIMS4PT_cpx
 
-This repository contains the code and supporting resources for **AIMS4PT_cpx**, an AI-assisted model-selection framework for clinopyroxene-based pressure-temperature (P-T) estimation. The framework evaluates the applicability of published clinopyroxene-only and clinopyroxene-liquid thermobarometers to a given dataset, runs P-T calculations, and exports model-selection and calculation reports.
+This repository contains the code and supporting resources for **AIMS4PT_cpx**, an AI-assisted model-selection framework for clinopyroxene-based pressure-temperature (P-T) estimation. The framework evaluates the applicability of published clinopyroxene-only and clinopyroxene-liquid thermobarometers to a given dataset, runs P-T calculations, and exports reports for model selection and calculation.
 
 ## Repository Layout
 
