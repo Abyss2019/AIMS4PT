@@ -1136,6 +1136,154 @@ class ModelManager(BaseModelManager, DatasetManager, FeatureManager, SHAPManager
 
         self.grid_uncertainty = None  # for grid prediction uncertainty
 
+    @staticmethod
+    def filter_models(
+        model_list,
+        model_name=None,
+        T_P=None,
+        cpx_only=None,
+        exact=True,
+        raise_if_empty=False,
+    ):
+        """
+        Filter model instances from an existing model pool.
+
+        Parameters
+        ----------
+        model_list : iterable
+            Existing model pool to search. Each model is expected to expose a
+            ``model_name`` attribute. ``T_P`` and ``cpx_only`` attributes are
+            optional, but models without those attributes will not match when
+            the corresponding filter is provided.
+        model_name : str, optional
+            Target model name. If ``None``, model names are not used as a
+            filter. The value is matched against each model's ``model_name``
+            attribute, not the class name.
+        T_P : {"T", "P"}, optional
+            Target thermobarometric parameter. ``"T"`` returns only
+            temperature models and ``"P"`` returns only pressure models. If
+            ``None``, both temperature and pressure models are allowed.
+        cpx_only : bool, optional
+            Phase-type filter. ``True`` returns only cpx-only models,
+            ``False`` returns only cpx-liq models, and ``None`` does not
+            restrict by phase type.
+        exact : bool, default True
+            Controls model name matching. If ``True``, ``model_name`` must
+            exactly match the model's ``model_name`` attribute. If ``False``,
+            matching is case-insensitive and allows ``model_name`` to be a
+            substring of the model's ``model_name`` attribute.
+        raise_if_empty : bool, default False
+            If ``True``, raise a ``ValueError`` when no matching model is
+            found. If ``False``, return an empty list.
+
+        Returns
+        -------
+        list
+            All models matching the requested filters. The returned list keeps
+            the same order as ``model_list``.
+
+        Examples
+        --------
+        >>> ModelManager.filter_models(model_list, model_name="Petrelli", exact=False)
+        >>> ModelManager.filter_models(model_list, T_P="T", cpx_only=True)
+        """
+        model_list = list(model_list)
+        matched_models = []
+
+        for model in model_list:
+            current_model_name = getattr(model, "model_name", None)
+
+            if model_name is not None:
+                if current_model_name is None:
+                    continue
+
+                current_model_name_str = str(current_model_name)
+                model_name_str = str(model_name)
+
+                if exact:
+                    if current_model_name_str != model_name_str:
+                        continue
+                elif model_name_str.lower() not in current_model_name_str.lower():
+                    continue
+
+            if T_P is not None and getattr(model, "T_P", None) != T_P:
+                continue
+
+            if cpx_only is not None and getattr(model, "cpx_only", None) != cpx_only:
+                continue
+
+            matched_models.append(model)
+
+        if raise_if_empty and not matched_models:
+            available_names = sorted(
+                {
+                    str(getattr(model, "model_name", type(model).__name__))
+                    for model in model_list
+                }
+            )
+            raise ValueError(
+                "No models matched the requested filters. "
+                f"Available model names: {available_names}"
+            )
+
+        return matched_models
+
+    @staticmethod
+    def get_model(
+        model_list,
+        model_name=None,
+        T_P=None,
+        cpx_only=None,
+        exact=True,
+        raise_if_empty=False,
+    ):
+        """
+        Return the first model matching filters from an existing model pool.
+
+        Parameters
+        ----------
+        model_list : iterable
+            Existing model pool to search.
+        model_name : str, optional
+            Target model name matched against each model's ``model_name``
+            attribute. If ``None``, model names are not used as a filter.
+        T_P : {"T", "P"}, optional
+            Target thermobarometric parameter. If ``None``, both temperature
+            and pressure models are allowed.
+        cpx_only : bool, optional
+            Phase-type filter. ``True`` returns only cpx-only models,
+            ``False`` returns only cpx-liq models, and ``None`` does not
+            restrict by phase type.
+        exact : bool, default True
+            If ``True``, require exact model name matching. If ``False``, use
+            case-insensitive substring matching.
+        raise_if_empty : bool, default False
+            If ``True``, raise a ``ValueError`` when no matching model is
+            found. If ``False``, return ``None``.
+
+        Returns
+        -------
+        object or None
+            The first matching model, or ``None`` if no model matches and
+            ``raise_if_empty`` is ``False``.
+
+        Examples
+        --------
+        >>> ModelManager.get_model(model_list, model_name="Petrelli", exact=False)
+        >>> ModelManager.get_model(model_list, T_P="P", cpx_only=False)
+        """
+        matched_models = ModelManager.filter_models(
+            model_list=model_list,
+            model_name=model_name,
+            T_P=T_P,
+            cpx_only=cpx_only,
+            exact=exact,
+            raise_if_empty=raise_if_empty,
+        )
+        if not matched_models:
+            return None
+        return matched_models[0]
+
     def __str__(self):
         # print class name, T_P,
         # cpx_only, require_water, uncertainty
