@@ -356,9 +356,91 @@ def plot_histogram_elements(data_df, specific_oxides=None, kde=True, compared_da
     plt.show()
 
 
+def _calculate_tukey_fences(values):
+    values = pd.to_numeric(pd.Series(values), errors="coerce").dropna().to_numpy()
+    if len(values) == 0:
+        return None
+
+    q1, q3 = np.percentile(values, [25, 75])
+    iqr = q3 - q1
+    return q1 - 1.5 * iqr, q3 + 1.5 * iqr
 
 
-def plot_all_Harker_diagrams(data_df, x_col, y_compositions, T_color=None, P_color=None, kde=False, ax=None, color = 'grey', label=None,size=40, edgecolors='k'):
+def _add_tukey_fence_overlay(ax, x_values, y_values, x_label, y_label, fence_axis="both"):
+    valid_axes = {"x", "y", "both"}
+    if fence_axis not in valid_axes:
+        raise ValueError(f"fence_axis must be one of {sorted(valid_axes)}.")
+
+    fence_lines = []
+    if fence_axis in {"x", "both"}:
+        x_fences = _calculate_tukey_fences(x_values)
+        if x_fences is not None:
+            lower, upper = x_fences
+            ax.axvspan(lower, upper, color="tab:green", alpha=0.08, zorder=0)
+            ax.axvline(lower, color="tab:green", linestyle="--", linewidth=1.2, zorder=1)
+            ax.axvline(upper, color="tab:green", linestyle="--", linewidth=1.2, zorder=1)
+            fence_lines.append(f"{x_label}: {lower:.2f}-{upper:.2f}")
+
+    if fence_axis in {"y", "both"}:
+        y_fences = _calculate_tukey_fences(y_values)
+        if y_fences is not None:
+            lower, upper = y_fences
+            ax.axhspan(lower, upper, color="tab:orange", alpha=0.08, zorder=0)
+            ax.axhline(lower, color="tab:orange", linestyle="--", linewidth=1.2, zorder=1)
+            ax.axhline(upper, color="tab:orange", linestyle="--", linewidth=1.2, zorder=1)
+            fence_lines.append(f"{y_label}: {lower:.2f}-{upper:.2f}")
+
+    if fence_lines:
+        print(f"Tukey 1.5 x IQR fences ({y_label} vs {x_label}): " + "; ".join(fence_lines))
+
+
+def _add_transparent_legend(ax, **kwargs):
+    handles, labels = ax.get_legend_handles_labels()
+    legend_items = [
+        (handle, label)
+        for handle, label in zip(handles, labels)
+        if label and not label.startswith("_")
+    ]
+    if not legend_items:
+        return None
+
+    handles, labels = zip(*legend_items)
+    return ax.legend(
+        handles,
+        labels,
+        frameon=True,
+        framealpha=0.75,
+        facecolor="white",
+        edgecolor="0.7",
+        **kwargs,
+    )
+
+
+def _resolve_panel_fence_axis(fence_axis, panel_index):
+    if panel_index == 0:
+        return fence_axis
+    if fence_axis == "both":
+        return "y"
+    if fence_axis == "x":
+        return None
+    return fence_axis
+
+
+def plot_all_Harker_diagrams(
+    data_df,
+    x_col,
+    y_compositions,
+    T_color=None,
+    P_color=None,
+    kde=False,
+    ax=None,
+    color='grey',
+    label=None,
+    size=40,
+    edgecolors='k',
+    distribution_overlay=None,
+    fence_axis="both",
+):
     '''
     Compare natural and experimental data. Useful when applying a Geothermobarometry method to a dataset.
     Harker diagrams are plotted for each pair of x and y columns. Colorbar for temperature or pressure can be added.
@@ -378,7 +460,15 @@ def plot_all_Harker_diagrams(data_df, x_col, y_compositions, T_color=None, P_col
             None by default. No colorbar for pressure.
         kde (bool):
             Whether to plot the kernel density estimate.
-            False by default.
+            False by default. Kept for backward compatibility; use
+            distribution_overlay="kde" for new code.
+        distribution_overlay (str or None):
+            Optional reference overlay. Use "kde" for the kernel density
+            contour or "tukey_fence" for Tukey's 1.5 x IQR fences.
+            If None, kde=True still draws the KDE overlay.
+        fence_axis (str):
+            Which Tukey fence axes to draw when distribution_overlay is
+            "tukey_fence": "x", "y", or "both".
         ax (Axes or array of Axes):
             Axes to plot on.
             If None, new axes will be created.
@@ -398,6 +488,11 @@ def plot_all_Harker_diagrams(data_df, x_col, y_compositions, T_color=None, P_col
     from ..utils import normalize_column_names
     _data_df_norm = normalize_column_names(_data_df)
 
+    if distribution_overlay is None and kde:
+        distribution_overlay = "kde"
+    if distribution_overlay not in {None, "kde", "tukey_fence"}:
+        raise ValueError('distribution_overlay must be None, "kde", or "tukey_fence".')
+
 
     from .plot_utils import get_subplot_shape
     n = len(y_compositions)
@@ -405,6 +500,15 @@ def plot_all_Harker_diagrams(data_df, x_col, y_compositions, T_color=None, P_col
     if ax is None:
         fig, ax = plt.subplots(nrow, ncol, figsize=(20, 5 * nrow), dpi=150)
         ax = ax.flatten()
+        for extra_ax in ax[n:]:
+            fig.delaxes(extra_ax)
+        ax = ax[:n]
+    else:
+        ax = np.array(ax).ravel()
+        fig = ax[0].figure
+        for extra_ax in ax[n:]:
+            fig.delaxes(extra_ax)
+        ax = ax[:n]
     # elif len(ax) != n:
     #     raise ValueError("ax should be a list of axes with length equal to the number of y_compositions.")
     cmap = "YlOrRd"
@@ -422,9 +526,20 @@ def plot_all_Harker_diagrams(data_df, x_col, y_compositions, T_color=None, P_col
             ax[i].scatter(_data_df_norm[x], _data_df_norm[y], c=color, s=size,
                           edgecolors=edgecolors, alpha=1, label=label)
 
-        if kde:
+        if distribution_overlay == "kde":
             sns.kdeplot(_data_df_norm, x=x, y=y,
                         ax=ax[i], fill=False, levels=1, color='blue')
+        elif distribution_overlay == "tukey_fence":
+            panel_fence_axis = _resolve_panel_fence_axis(fence_axis, i)
+            if panel_fence_axis is not None:
+                _add_tukey_fence_overlay(
+                    ax[i],
+                    _data_df_norm[x],
+                    _data_df_norm[y],
+                    x,
+                    y,
+                    fence_axis=panel_fence_axis,
+                )
         # red star, non-filled
 
         # Add colorbar
@@ -437,11 +552,37 @@ def plot_all_Harker_diagrams(data_df, x_col, y_compositions, T_color=None, P_col
 
         ax[i].set_xlabel(x)
         ax[i].set_ylabel(y)
-        # ax[i].legend()
         ax[i].grid(True, color='grey', linestyle='--', linewidth=0.5)
 
+    legend_by_label = {}
+    for plot_ax in ax[:n]:
+        handles, labels = plot_ax.get_legend_handles_labels()
+        for handle, item_label in zip(handles, labels):
+            if item_label and not item_label.startswith("_") and item_label not in legend_by_label:
+                legend_by_label[item_label] = handle
+
+        legend = plot_ax.get_legend()
+        if legend is not None:
+            legend.remove()
+
+    for fig_legend in list(fig.legends):
+        fig_legend.remove()
+
+    if legend_by_label:
+        legend_anchor_ax = ax[0]
+        legend_anchor_ax.legend(
+            legend_by_label.values(),
+            legend_by_label.keys(),
+            loc="upper right",
+            bbox_to_anchor=(-0.02, 1.0),
+            frameon=True,
+            framealpha=0.75,
+            facecolor="white",
+            edgecolor="0.7",
+        )
+
     # plt.show()
-    plt.tight_layout()
+    plt.tight_layout(rect=(0.08, 0, 1, 1))
     
     return  ax
 

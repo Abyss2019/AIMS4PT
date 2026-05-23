@@ -2858,6 +2858,22 @@ def plot_ranked_thermobarometry_literature_comparison(
     return fig, axes
 
 
+def _show_ranked_thermobarometry_figures(figures: Mapping[str, tuple[plt.Figure, np.ndarray]]) -> None:
+    backend = plt.get_backend().lower()
+    if backend.endswith("agg"):
+        try:
+            from IPython.display import display
+        except ImportError:
+            return
+
+        # Agg cannot show interactively, but notebooks can still render figures.
+        for fig, _axes in figures.values():
+            display(fig)
+        return
+
+    plt.show()
+
+
 def plot_ranked_thermobarometry_summary(
     cpx_only_workflows: Any,
     cpx_liq_workflows: Any,
@@ -2881,9 +2897,15 @@ def plot_ranked_thermobarometry_summary(
     literature_figsize: tuple[float, float] = (16.5, 16),
     this_study_save_path: Optional[str | Path] = None,
     literature_save_path: Optional[str | Path] = None,
+    show: bool = True,
 ) -> dict[str, tuple[plt.Figure, np.ndarray]]:
     """
     Convenience wrapper that reproduces both notebook summary figures.
+
+    Parameters
+    ----------
+    show : bool, default True
+        Whether to display the generated figures before returning them.
 
     Returns
     -------
@@ -2934,6 +2956,9 @@ def plot_ranked_thermobarometry_summary(
             figsize=literature_figsize,
             save_path=literature_save_path,
         )
+
+    if show:
+        _show_ranked_thermobarometry_figures(figures)
 
     return figures
 
