@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
+from pathlib import Path
 from scipy.spatial import ConvexHull, QhullError
 
 from aims4pt.data_tools.rocks import get_TAS_rock_types
@@ -16,11 +17,102 @@ from aims4pt.statistic_tools.density_region_analysis import rock_type_check
 from aims4pt.utils import normalize_column_names
 from aims4pt.visualization.composition_plot import plot_glass_TAS_diagram
 from paper.scripts.cache_helpers import _fast_df_fingerprint, cache_load, cache_save
+from paper.scripts.constants_illustration import (
+    AXIS_LABEL_SIZE,
+    LEGEND_FONT_SIZE,
+    MODEL_TICK_LABEL_SIZE,
+    PANEL_TITLE_SIZE,
+    TICK_LABEL_SIZE,
+    Y_AXIS_LABEL_SIZE,
+    get_model_abbreviation,
+)
 
 try:
     import shap
 except ImportError:  # pragma: no cover
     shap = None
+
+
+def save_figure_pdf_png(fig, output_dir, stem, *, dpi=300, bbox_inches="tight", **savefig_kwargs):
+    """Save a figure as both PDF and PNG using a shared file stem."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    pdf_path = output_dir / f"{stem}.pdf"
+    png_path = output_dir / f"{stem}.png"
+    fig.savefig(pdf_path, bbox_inches=bbox_inches, **savefig_kwargs)
+    fig.savefig(png_path, dpi=dpi, bbox_inches=bbox_inches, **savefig_kwargs)
+    return pdf_path, png_path
+
+
+def model_abbreviation_labels(model_names, T_P):
+    """Return Table 1-style abbreviations for a sequence of model names."""
+    return [get_model_abbreviation(model_name, T_P) for model_name in model_names]
+
+
+def apply_figure_font_sizes(
+    fig,
+    *,
+    labelsize=AXIS_LABEL_SIZE,
+    ylabelsize=Y_AXIS_LABEL_SIZE,
+    tick_labelsize=TICK_LABEL_SIZE,
+    model_tick_labels=None,
+    model_tick_axes=None,
+    model_tick_labelsize=MODEL_TICK_LABEL_SIZE,
+    title_size=PANEL_TITLE_SIZE,
+    legend_font_size=LEGEND_FONT_SIZE,
+):
+    """Apply manuscript figure font sizes to axes and legends."""
+    if model_tick_labels is True and model_tick_axes is None:
+        model_tick_axes = fig.axes
+    elif model_tick_labels is False:
+        model_tick_axes = []
+    model_tick_axes = set(model_tick_axes or [])
+    for ax in fig.axes:
+        ax.xaxis.label.set_size(labelsize)
+        ax.yaxis.label.set_size(ylabelsize)
+        ax.tick_params(axis="both", labelsize=tick_labelsize)
+        if ax in model_tick_axes:
+            ax.tick_params(axis="x", labelsize=model_tick_labelsize)
+        ax.title.set_size(title_size)
+
+    for legend in fig.legends:
+        for text in legend.get_texts():
+            text.set_fontsize(legend_font_size)
+    for ax in fig.axes:
+        legend = ax.get_legend()
+        if legend is None:
+            continue
+        for text in legend.get_texts():
+            text.set_fontsize(legend_font_size)
+
+
+def add_panel_label_yaxis_aligned(
+    ax,
+    label,
+    *,
+    x=-0.12,
+    y=0.98,
+    fontsize=PANEL_TITLE_SIZE,
+    fontweight="bold",
+    bbox=True,
+):
+    """Add a panel label aligned left of the plotting area near the y-axis."""
+    bbox_kw = None
+    if bbox:
+        bbox_kw = dict(boxstyle="round,pad=0.15", facecolor="white", edgecolor="none", alpha=0.8)
+    ax.text(
+        x,
+        y,
+        label,
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=fontsize,
+        fontweight=fontweight,
+        bbox=bbox_kw,
+        zorder=10,
+        clip_on=False,
+    )
 
 
 
@@ -376,14 +468,15 @@ def _set_pair_limits__nb00_c18(ax, x_series, y_series, pad_frac=0.05):
     ax.set_xlim(xmin - xpad, xmax + xpad)
     ax.set_ylim(ymin - ypad, ymax + ypad)
 
-def _panel_label__nb00_c18(ax, label):
+def _panel_label__nb00_c18(ax, label, *, x=-0.12, y=0.98):
     ax.text(
-        0.01, 0.98, label,
+        x, y, label,
         transform=ax.transAxes,
         va="top",
         ha="left",
         fontsize=14,
         fontweight="bold",
+        clip_on=False,
     )
 
 
@@ -2319,7 +2412,7 @@ def _dedupe_handles_labels__nb03_c20(handles, labels):
             od[l] = h
     return list(od.values()), list(od.keys())
 
-def _add_panel_label__nb03_c20(ax, label, *, x=0.02, y=0.98, fontsize=14):
+def _add_panel_label__nb03_c20(ax, label, *, x=-0.12, y=0.98, fontsize=14):
     ax.text(
         x, y, label,
         transform=ax.transAxes,
@@ -2328,6 +2421,7 @@ def _add_panel_label__nb03_c20(ax, label, *, x=0.02, y=0.98, fontsize=14):
         fontweight="bold",
         bbox=dict(boxstyle="round,pad=0.15", facecolor="white", edgecolor="none", alpha=0.8),
         zorder=10,
+        clip_on=False,
     )
 
 def plot_pressure_residual_panel__nb03_c20(
@@ -2344,6 +2438,7 @@ def plot_pressure_residual_panel__nb03_c20(
     skip_tab10_gray=True,
     marker_sets_master=None,
     title="Pressure Residuals Panel",
+    y_lim=None,
     # ✅ NEW
     add_workflow_rmse_text=True,
     rmse_text_kwargs=None,
@@ -2445,6 +2540,8 @@ def plot_pressure_residual_panel__nb03_c20(
     # ----------------------------
     ax.axhline(0, color='black', linestyle='--', linewidth=1)
     ax.set_xlim(P_min - 1, P_max + 1)
+    if y_lim is not None:
+        ax.set_ylim(*y_lim)
     ax.set_xlabel("True P (kbar)")
     ax.set_ylabel("ΔP (kbar)")
     ax.set_title(title)
@@ -2481,7 +2578,7 @@ def _dedupe_handles_labels__nb03_c23(handles, labels):
             od[l] = h
     return list(od.values()), list(od.keys())
 
-def _add_panel_label__nb03_c23(ax, label, *, x=0.02, y=0.98, fontsize=14):
+def _add_panel_label__nb03_c23(ax, label, *, x=-0.12, y=0.98, fontsize=14):
     ax.text(
         x, y, label,
         transform=ax.transAxes,
@@ -2490,6 +2587,7 @@ def _add_panel_label__nb03_c23(ax, label, *, x=0.02, y=0.98, fontsize=14):
         fontweight="bold",
         bbox=dict(boxstyle="round,pad=0.15", facecolor="white", edgecolor="none", alpha=0.8),
         zorder=10,
+        clip_on=False,
     )
 
 def plot_temperature_residual_panel__nb03_c23(
@@ -2506,6 +2604,7 @@ def plot_temperature_residual_panel__nb03_c23(
     skip_tab10_gray=True,
     marker_sets_master=None,
     title="Temperature Residuals Panel",
+    y_lim=None,
     limit_y=False,
     add_workflow_rmse_text=True,
     rmse_text_kwargs=None,
@@ -2610,7 +2709,9 @@ def plot_temperature_residual_panel__nb03_c23(
     # ----------------------------
     ax.axhline(0, color='black', linestyle='--', linewidth=1)
     ax.set_xlim(T_min, T_max)
-    if limit_y:
+    if y_lim is not None:
+        ax.set_ylim(*y_lim)
+    elif limit_y:
         ax.set_ylim(top=400,)
     ax.set_xlabel("True T (°C)")
     ax.set_ylabel("ΔT (°C)")
@@ -2652,7 +2753,7 @@ def _dedupe_handles_labels__nb03_c27(handles, labels):
             od[l] = h
     return list(od.values()), list(od.keys())
 
-def _add_panel_label__nb03_c27(ax, label, *, x=0.02, y=0.98, fontsize=14):
+def _add_panel_label__nb03_c27(ax, label, *, x=-0.12, y=0.98, fontsize=14):
     ax.text(
         x, y, label,
         transform=ax.transAxes,
@@ -2661,6 +2762,7 @@ def _add_panel_label__nb03_c27(ax, label, *, x=0.02, y=0.98, fontsize=14):
         fontweight="bold",
         bbox=dict(boxstyle="round,pad=0.15", facecolor="white", edgecolor="none", alpha=0.8),
         zorder=10,
+        clip_on=False,
     )
 
 def _calc_regression_fit__nb03_c27(x, y):
@@ -2684,6 +2786,7 @@ def plot_pressure_residual_panel__nb03_c27(
     skip_tab10_gray=True,
     marker_sets_master=None,
     title="Pressure Residuals Panel",
+    y_lim=None,
     # ✅ NEW
     add_workflow_rmse_text=True,
     rmse_text_kwargs=None,
@@ -2809,6 +2912,8 @@ def plot_pressure_residual_panel__nb03_c27(
     # ----------------------------
     ax.axhline(0, color='black', linestyle='--', linewidth=1)
     ax.set_xlim(P_min - 1, P_max + 1)
+    if y_lim is not None:
+        ax.set_ylim(*y_lim)
     ax.set_xlabel("True P (kbar)")
     ax.set_ylabel("ΔP (kbar)")
     ax.set_title(title)
@@ -2850,7 +2955,7 @@ def _dedupe_handles_labels__nb03_c29(handles, labels):
             od[l] = h
     return list(od.values()), list(od.keys())
 
-def _add_panel_label__nb03_c29(ax, label, *, x=0.02, y=0.98, fontsize=14):
+def _add_panel_label__nb03_c29(ax, label, *, x=-0.12, y=0.98, fontsize=14):
     ax.text(
         x, y, label,
         transform=ax.transAxes,
@@ -2859,6 +2964,7 @@ def _add_panel_label__nb03_c29(ax, label, *, x=0.02, y=0.98, fontsize=14):
         fontweight="bold",
         bbox=dict(boxstyle="round,pad=0.15", facecolor="white", edgecolor="none", alpha=0.8),
         zorder=10,
+        clip_on=False,
     )
 
 def _calc_regression_fit__nb03_c29(x, y):
@@ -2882,6 +2988,7 @@ def plot_temperature_residual_panel__nb03_c29(
     skip_tab10_gray=True,
     marker_sets_master=None,
     title="Temperature Residuals Panel",
+    y_lim=None,
     limit_y=False,
     add_workflow_rmse_text=True,
     rmse_text_kwargs=None,
@@ -3007,7 +3114,9 @@ def plot_temperature_residual_panel__nb03_c29(
     # ----------------------------
     ax.axhline(0, color='black', linestyle='--', linewidth=1)
     ax.set_xlim(T_min, T_max)
-    if limit_y:
+    if y_lim is not None:
+        ax.set_ylim(*y_lim)
+    elif limit_y:
         ax.set_ylim(top=400,)
     ax.set_xlabel("True T (°C)")
     ax.set_ylabel("ΔT (°C)")

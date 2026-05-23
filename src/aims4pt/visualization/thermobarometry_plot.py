@@ -23,6 +23,7 @@ from typing import Any, Mapping, Optional, Sequence
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 from matplotlib.ticker import AutoMinorLocator, FixedLocator, NullLocator
+from matplotlib.transforms import blended_transform_factory
 from aims4pt.utils import normalize_column_names
 from aims4pt.toolkit_utils import wrap_text
 from aims4pt.visualization.plot_utils import get_subplot_shape
@@ -1325,13 +1326,25 @@ def _short_model_name(model_name: str) -> str:
     return _clean_str(model_name).split("(")[0].strip()
 
 
+def _model_axis_label(model_name: str, kind: Optional[str] = None, *, use_model_abbreviations: bool = False) -> str:
+    if not use_model_abbreviations:
+        return _short_model_name(model_name)
+    if kind is None:
+        return _short_model_name(model_name)
+    try:
+        from paper.scripts.constants_illustration import get_model_abbreviation
+    except Exception:
+        return _short_model_name(model_name)
+    return get_model_abbreviation(model_name, kind)
+
+
 def _display_phase_type_label(value: Any) -> str:
     label = _clean_str(value)
     key = label.lower().replace("_", "-").replace(" ", "-")
     if key in {"cpx-only", "clinopyroxene-only"}:
-        return "clinopyroxene-only"
+        return "Clinopyroxene-only"
     if key in {"cpx-liq", "cpx-liquid", "clinopyroxene-liquid"}:
-        return "clinopyroxene-liquid"
+        return "Clinopyroxene-liquid"
     return label
 
 
@@ -1802,6 +1815,7 @@ def _plot_ranked_this_study_kind_panel(
     layer_boundaries_km: Optional[Sequence[float]] = None,
     depth_tick_step: float = 5,
     depth_max: float = 37,
+    use_model_abbreviations: bool = False,
 ) -> None:
     kind_state = state[kind]
     columns_all = kind_state["columns_all"]
@@ -1829,7 +1843,18 @@ def _plot_ranked_this_study_kind_panel(
     ax.grid(True, which="minor", axis="y", linestyle="-", linewidth=0.5, color="0.92", zorder=0)
 
     ax.set_xticks(positions)
-    ax.set_xticklabels([wrap_text(_short_model_name(col), max_width=12) for col in columns_all], rotation=0, ha="center", fontsize=12)
+    ax.set_xticklabels(
+        [
+            wrap_text(
+                _model_axis_label(col, kind, use_model_abbreviations=use_model_abbreviations),
+                max_width=12,
+            )
+            for col in columns_all
+        ],
+        rotation=0,
+        ha="center",
+        fontsize=14 if use_model_abbreviations else 12,
+    )
     ax.xaxis.set_minor_locator(NullLocator())
     ax.tick_params(axis="x", which="minor", bottom=False, top=False)
 
@@ -2232,6 +2257,60 @@ def _add_category_and_type_bands(ax: plt.Axes, methods: Sequence[Mapping[str, An
         ax.axvline(x1, color="0.93", lw=0.9, zorder=1)
 
 
+def _add_pressure_reservoir_bands(
+    ax: plt.Axes,
+    reservoir_bands: Sequence[Mapping[str, Any]],
+    *,
+    densities_kg_m3: Optional[Sequence[float]] = None,
+    layer_boundaries_km: Optional[Sequence[float]] = None,
+) -> None:
+    transform = blended_transform_factory(ax.transAxes, ax.transData)
+    for band in reservoir_bands:
+        min_depth = band.get("min_depth_km", band.get("min km"))
+        max_depth = band.get("max_depth_km", band.get("max km"))
+        if min_depth is None or max_depth is None:
+            continue
+        p0, p1 = _convert_depth_range_to_pressure_range(
+            (float(min_depth), float(max_depth)),
+            densities_kg_m3=densities_kg_m3,
+            layer_boundaries_km=layer_boundaries_km,
+        )
+        y0, y1 = sorted((p0, p1))
+        color = band.get("color", "0.85")
+        alpha = float(band.get("alpha", 0.18))
+        hatch = band.get("hatch")
+        linestyle = band.get("linestyle", "-")
+        edgecolor = band.get("edgecolor", color)
+        label = _clean_str(band.get("label"))
+        ax.axhspan(
+            y0,
+            y1,
+            xmin=0.0,
+            xmax=1.0,
+            facecolor=color,
+            edgecolor=edgecolor,
+            alpha=alpha,
+            hatch=hatch,
+            linestyle=linestyle,
+            linewidth=0.8 if hatch or linestyle != "-" else 0,
+            zorder=0.45,
+        )
+        if label:
+            ax.text(
+                1.01,
+                0.5 * (y0 + y1),
+                label,
+                transform=transform,
+                ha="left",
+                va="center",
+                fontsize=10,
+                color=band.get("text_color", "0.20"),
+                bbox=dict(boxstyle="round,pad=0.15", facecolor="white", edgecolor="none", alpha=0.55),
+                zorder=1.6,
+                clip_on=False,
+            )
+
+
 def _group_literature_methods(
     df: pd.DataFrame,
     *,
@@ -2296,6 +2375,7 @@ def _build_this_study_columns_for_comparison(
     state: Mapping[str, Any],
     *,
     selection_threshold: float,
+    use_model_abbreviations: bool = False,
 ) -> list[dict[str, Any]]:
     kind_state = state[kind]
     columns = []
@@ -2316,7 +2396,11 @@ def _build_this_study_columns_for_comparison(
                         "type": phase_type,
                         "eruption": year,
                         "model": model_name,
-                        "label": _short_model_name(model_name),
+                        "label": _model_axis_label(
+                            model_name,
+                            kind,
+                            use_model_abbreviations=use_model_abbreviations,
+                        ),
                         "data": _remove_boxplot_outliers(df_pred[model_name].dropna().to_numpy()),
                         "rank_i": rank_i,
                         "pct": rank_pct_map.get(model_name),
@@ -2518,8 +2602,15 @@ def _plot_ranked_literature_panel(
     literature_pressure_source: str = "pressure",
     depth_tick_step: float = 5,
     depth_max: float = 37,
+    use_model_abbreviations: bool = False,
+    pressure_reservoir_bands: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> None:
-    this_cols = _build_this_study_columns_for_comparison(kind, state, selection_threshold=selection_threshold)
+    this_cols = _build_this_study_columns_for_comparison(
+        kind,
+        state,
+        selection_threshold=selection_threshold,
+        use_model_abbreviations=use_model_abbreviations,
+    )
     lit_methods = _group_literature_methods(
         literature_df,
         kind=kind,
@@ -2531,6 +2622,13 @@ def _plot_ranked_literature_panel(
     methods_all = _build_methods_for_bands(this_cols, lit_methods)
     x_all = np.arange(1, len(methods_all) + 1)
     _add_category_and_type_bands(ax, methods_all, x_all)
+    if kind == "P" and pressure_reservoir_bands:
+        _add_pressure_reservoir_bands(
+            ax,
+            pressure_reservoir_bands,
+            densities_kg_m3=densities_kg_m3,
+            layer_boundaries_km=layer_boundaries_km,
+        )
 
     n_this = len(this_cols)
     if n_this > 0:
@@ -2653,7 +2751,7 @@ def _apply_this_study_axis_font_sizes(
         ax.tick_params(axis="both", labelsize=tick_labelsize)
 
 
-def _add_panel_label(ax: plt.Axes, label: str, *, x: float = 0.01, y: float = 1.04, fontsize: float = 19) -> None:
+def _add_panel_label(ax: plt.Axes, label: str, *, x: float = -0.055, y: float = 1.04, fontsize: float = 19) -> None:
     ax.text(
         x,
         y,
@@ -2665,6 +2763,7 @@ def _add_panel_label(ax: plt.Axes, label: str, *, x: float = 0.01, y: float = 1.
         fontweight="bold",
         bbox=dict(boxstyle="round,pad=0.15", facecolor="white", edgecolor="none", alpha=0.8),
         zorder=10,
+        clip_on=False,
     )
 
 
@@ -2688,6 +2787,7 @@ def plot_ranked_thermobarometry_this_study(
     add_legend: bool = True,
     panel_labels: tuple[str, str] = ("(a)", "(b)"),
     save_path: Optional[str | Path] = None,
+    use_model_abbreviations: bool = False,
 ) -> tuple[plt.Figure, np.ndarray]:
     """
     Plot the notebook-style two-panel "this study" summary figure.
@@ -2738,6 +2838,7 @@ def plot_ranked_thermobarometry_this_study(
         layer_boundaries_km=layer_boundaries_km,
         depth_tick_step=depth_tick_step,
         depth_max=depth_max,
+        use_model_abbreviations=use_model_abbreviations,
     )
     _plot_ranked_this_study_kind_panel(
         axes[1],
@@ -2746,6 +2847,7 @@ def plot_ranked_thermobarometry_this_study(
         selection_threshold=selection_threshold,
         depth_tick_step=depth_tick_step,
         depth_max=depth_max,
+        use_model_abbreviations=use_model_abbreviations,
     )
 
     if add_legend:
@@ -2793,6 +2895,8 @@ def plot_ranked_thermobarometry_literature_comparison(
     add_literature_legend: bool = True,
     panel_labels: tuple[str, str] = ("(a)", "(b)"),
     save_path: Optional[str | Path] = None,
+    use_model_abbreviations: bool = False,
+    pressure_reservoir_bands: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> tuple[plt.Figure, np.ndarray]:
     """
     Plot the notebook-style two-panel "this study vs literature" comparison.
@@ -2835,6 +2939,8 @@ def plot_ranked_thermobarometry_literature_comparison(
         literature_pressure_source=literature_pressure_source,
         depth_tick_step=depth_tick_step,
         depth_max=depth_max,
+        use_model_abbreviations=use_model_abbreviations,
+        pressure_reservoir_bands=pressure_reservoir_bands,
     )
     _plot_ranked_literature_panel(
         axes[1],
@@ -2845,6 +2951,7 @@ def plot_ranked_thermobarometry_literature_comparison(
         add_literature_legend=False,
         depth_tick_step=depth_tick_step,
         depth_max=depth_max,
+        use_model_abbreviations=use_model_abbreviations,
     )
 
     if panel_labels:
@@ -2898,6 +3005,8 @@ def plot_ranked_thermobarometry_summary(
     this_study_save_path: Optional[str | Path] = None,
     literature_save_path: Optional[str | Path] = None,
     show: bool = True,
+    use_model_abbreviations: bool = False,
+    pressure_reservoir_bands: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> dict[str, tuple[plt.Figure, np.ndarray]]:
     """
     Convenience wrapper that reproduces both notebook summary figures.
@@ -2931,6 +3040,7 @@ def plot_ranked_thermobarometry_summary(
             depth_max=depth_max,
             figsize=this_study_figsize,
             save_path=this_study_save_path,
+            use_model_abbreviations=use_model_abbreviations,
         )
     }
 
@@ -2955,6 +3065,8 @@ def plot_ranked_thermobarometry_summary(
             depth_max=depth_max,
             figsize=literature_figsize,
             save_path=literature_save_path,
+            use_model_abbreviations=use_model_abbreviations,
+            pressure_reservoir_bands=pressure_reservoir_bands,
         )
 
     if show:
