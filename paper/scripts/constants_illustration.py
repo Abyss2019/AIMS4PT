@@ -4,13 +4,13 @@ from __future__ import annotations
 
 
 # Shared manuscript figure font sizes.
-AXIS_LABEL_SIZE = 14
-Y_AXIS_LABEL_SIZE = 14
-TICK_LABEL_SIZE = 12
+AXIS_LABEL_SIZE = 16
+Y_AXIS_LABEL_SIZE = 16
+TICK_LABEL_SIZE = 13
 MODEL_TICK_LABEL_SIZE = 14
-PANEL_TITLE_SIZE = 14
-TITLE_SIZE = 16
-LEGEND_FONT_SIZE = 13
+PANEL_TITLE_SIZE = 15
+TITLE_SIZE = 17
+LEGEND_FONT_SIZE = 12
 
 
 # Model-name to Table 1 abbreviation maps. Pressure and temperature are kept
@@ -18,9 +18,9 @@ LEGEND_FONT_SIZE = 13
 # equations while Table 1 assigns different abbreviations to the P and T sides.
 PRESSURE_MODEL_ABBREVIATIONS = {
     # cpx-only
-    "Putirka, 2008 eq32d_T; eq32a_P": "Put08_32a",
-    "Putirka, 2008 eq32d_T; eq32b_P": "Put08_32b",
-    "Putirka, 2008 eq32d_T_hydrousVersion; eq32b_P": "Put08_32b",
+    "Putirka, 2008 eq32d_T; eq32a_P": "Pu08_32a",
+    "Putirka, 2008 eq32d_T; eq32b_P": "Pu08_32b",
+    "Putirka, 2008 eq32d_T_hydrousVersion; eq32b_P": "Pu08_32b",
     "Petrelli et al., 2020 (cpx_only)": "Pet20",
     "Wang et al., 2021 (cpx_only)": "Wan21",
     "Higgins et al., 2021 (cpx_only)": "Hig21",
@@ -28,8 +28,8 @@ PRESSURE_MODEL_ABBREVIATIONS = {
     "Chicchi et al., 2023 (cpx_only)": "Chi23",
     "\u00c1greda-L\u00f3pez et al., 2024 (cpx_only)": "AgL24",
     # cpx-liq
-    "Putirka, 2008 eq33_T; eq31_P": "Put08_31",
-    "Putirka, 2008 eq33_T; eq31_P (cpx_liq)": "Put08_31",
+    "Putirka, 2008 eq33_T; eq31_P": "Pu08_31",
+    "Putirka, 2008 eq33_T; eq31_P (cpx_liq)": "Pu08_31",
     "Neave & Putirka, 2017 Pu08_eq33_T; eq1_P": "NP17",
     "Neave & Putirka, 2017 Pu08_eq33_T; eq1_P (cpx_liq)": "NP17",
     "Neave & Putirka, 2017 Pu08_eq33_T; eq1_P (cpx_liq) (cpx_liq)": "NP17",
@@ -41,9 +41,9 @@ PRESSURE_MODEL_ABBREVIATIONS = {
 
 TEMPERATURE_MODEL_ABBREVIATIONS = {
     # cpx-only
-    "Putirka, 2008 eq32d_T; eq32a_P": "Put08_32d",
-    "Putirka, 2008 eq32d_T; eq32b_P": "Put08_32d",
-    "Putirka, 2008 eq32d_T_hydrousVersion; eq32b_P": "Put08_32d",
+    "Putirka, 2008 eq32d_T; eq32a_P": "Pu08_32d",
+    "Putirka, 2008 eq32d_T; eq32b_P": "Pu08_32d",
+    "Putirka, 2008 eq32d_T_hydrousVersion; eq32b_P": "Pu08_32d",
     "Petrelli et al., 2020 (cpx_only)": "Pet20",
     "Wang et al., 2021 (cpx_only)": "Wan21",
     "Higgins et al., 2021 (cpx_only)": "Hig21",
@@ -51,8 +51,8 @@ TEMPERATURE_MODEL_ABBREVIATIONS = {
     "Chicchi et al., 2023 (cpx_only)": "Chi23",
     "\u00c1greda-L\u00f3pez et al., 2024 (cpx_only)": "AgL24",
     # cpx-liq
-    "Putirka, 2008 eq33_T; eq31_P": "Put08_33",
-    "Putirka, 2008 eq33_T; eq31_P (cpx_liq)": "Put08_33",
+    "Putirka, 2008 eq33_T; eq31_P": "Pu08_33",
+    "Putirka, 2008 eq33_T; eq31_P (cpx_liq)": "Pu08_33",
     "Brugman & Till, 2019 (cpx_liq)": "BT19",
     "Petrelli et al., 2020 (cpx_liq)": "Pet20",
     "Jorgenson et al., 2022 (cpx_liq)": "Jor22",
@@ -77,6 +77,27 @@ def get_model_abbreviation(model_name: str, T_P: str) -> str:
         return abbreviation
 
     normalized_name = str(model_name).lower()
+    normalized_name = normalized_name.replace(" ", "")
+    normalized_name = normalized_name.replace("(cpx_only)", "").replace("(cpx_liq)", "")
+    normalized_name = normalized_name.removesuffix("_p").removesuffix("_t")
+
+    if "putirka" in normalized_name and "2008" in normalized_name:
+        if T_P_key == "P":
+            if "eq32a_p" in normalized_name or "eq32a" in normalized_name:
+                return "Pu08_32a"
+            if "eq32b_p" in normalized_name or "eq32b" in normalized_name:
+                return "Pu08_32b"
+            if "eq31_p" in normalized_name or "eq31" in normalized_name:
+                return "Pu08_31"
+        if T_P_key == "T":
+            if "eq32d_t" in normalized_name or "eq32d" in normalized_name:
+                return "Pu08_32d"
+            if "eq33_t" in normalized_name or "eq33" in normalized_name:
+                return "Pu08_33"
+
+    if "neave" in normalized_name and "putirka" in normalized_name:
+        return "NP17"
+
     if "greda" in normalized_name and "2024" in normalized_name:
         return "AgL24"
 

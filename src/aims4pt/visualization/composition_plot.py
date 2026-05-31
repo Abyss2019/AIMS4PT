@@ -736,6 +736,8 @@ def plot_glass_TAS_diagram(
     plot_alkaline_boundary: bool = False,
     kde = False,
     add_TAS_labels: bool = True,
+    plot_TAS_fields: bool = True,
+    alkaline_boundary_linewidth: float = 2,
     fill= False,
     **kwargs
 ):
@@ -764,6 +766,10 @@ def plot_glass_TAS_diagram(
     ylim : tuple(float, float), optional
         Custom Na2O + K2O limits for the TAS background and scatter. Defaults
         to the data-driven upper bound starting at zero if None.
+    plot_TAS_fields : bool, optional
+        If False, skip TAS field boundaries and labels.
+    alkaline_boundary_linewidth : float, optional
+        Line width for the alkaline/subalkaline boundary.
 
     
     Returns
@@ -801,28 +807,29 @@ def plot_glass_TAS_diagram(
                 marker=marker, 
                 label=label, **kwargs)
     tas_pred = cm.predict(liq_df[["SiO2", "Na2O + K2O"]])
-    cm.add_to_axes(
-        ax,
-        alpha=1,
-        linewidth=0.5,
-        zorder=-1,
-        add_labels=add_TAS_labels,
-        which_labels="volcanic",
-        which_ids= np.unique(tas_pred),
-        label_at_centroid=True,
-        fill=fill,
-        facecolor= "lightgrey",
-    )
-    cm.add_to_axes(
-        ax,
-        alpha=1,
-        linewidth=0.5,
-        zorder=0,
-        add_labels=add_TAS_labels,
-        which_labels="volcanic",
-        label_at_centroid=True,
-        fill=False,
-    )
+    if plot_TAS_fields:
+        cm.add_to_axes(
+            ax,
+            alpha=1,
+            linewidth=0.5,
+            zorder=-1,
+            add_labels=add_TAS_labels,
+            which_labels="volcanic",
+            which_ids= np.unique(tas_pred),
+            label_at_centroid=True,
+            fill=fill,
+            facecolor= "lightgrey",
+        )
+        cm.add_to_axes(
+            ax,
+            alpha=1,
+            linewidth=0.5,
+            zorder=0,
+            add_labels=add_TAS_labels,
+            which_labels="volcanic",
+            label_at_centroid=True,
+            fill=False,
+        )
 
     # plot Alkaline vs Subalkaline boundary line
     if plot_alkaline_boundary :
@@ -836,7 +843,14 @@ def plot_glass_TAS_diagram(
             + 3.9492    * ys
             + 39.0
         )
-        ax.plot(Na2O_plus_K2O_boundary, ys, color='black', linestyle='--', linewidth=2, label='Alkaline/Subalkaline boundary')
+        ax.plot(
+            Na2O_plus_K2O_boundary,
+            ys,
+            color='black',
+            linestyle='--',
+            linewidth=alkaline_boundary_linewidth,
+            label='Alkaline/Subalkaline boundary',
+        )
 
     # kde 
     if kde:

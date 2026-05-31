@@ -2553,11 +2553,11 @@ def plot_pressure_residual_panel__nb03_c20(
                 fontsize=12,
                 ha="center",
                 va="top",
-                bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor="none", alpha=0.8),
+                bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor="none", alpha=0.6),
             )
         ax.text(
-            0.6, 0.90,
-            f"RMSE (AIMS4PT_cpx) = {wf_rmse:.2f} kbar",
+            0.75, 0.90,
+            f"RMSE (AIMS4PT_cpx)\n= {wf_rmse:.2f} kbar",
             transform=ax.transAxes,
             **rmse_text_kwargs,
         )
@@ -2727,8 +2727,8 @@ def plot_temperature_residual_panel__nb03_c23(
                 bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor="none", alpha=0),
             )
         ax.text(
-            0.6, 0.90,
-            f"RMSE (AIMS4PT_cpx) = {wf_rmse:.0f} °C",
+            0.75, 0.90,
+            f"RMSE (AIMS4PT_cpx)\n= {wf_rmse:.0f} °C",
             transform=ax.transAxes,
             **rmse_text_kwargs,
         )
@@ -2894,14 +2894,14 @@ def plot_pressure_residual_panel__nb03_c27(
         color='red', edgecolor='black', zorder=3,
     )
     legend_handles.append(sc_wf)
-    legend_labels.append("AIMS4PT_cpx  (this study)")
+    legend_labels.append("AIMS4PT_cpx (this study)")
     wf_slope, wf_intercept, wf_n_points = _calc_regression_fit__nb03_c27(P_real_, wf_residual)
     if np.isfinite(wf_slope):
         x_line = np.array([P_min, P_max], dtype=float)
         y_line = wf_slope * x_line + wf_intercept
         ax.plot(x_line, y_line, color="black", linewidth=2.8, zorder=4)
     slope_rows.append({
-        "model_name": "AIMS4PT_cpx  (this study)",
+        "model_name": "AIMS4PT_cpx (this study)",
         "slope": wf_slope,
         "intercept": wf_intercept,
         "n_points": wf_n_points,
@@ -2925,11 +2925,11 @@ def plot_pressure_residual_panel__nb03_c27(
                 fontsize=12,
                 ha="center",
                 va="top",
-                bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor="none", alpha=0.8),
+                bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor="none", alpha=0.6),
             )
         ax.text(
-            0.6, 0.90,
-            f"RMSE (AIMS4PT_cpx ) = {wf_rmse:.2f} kbar",
+            0.75, 0.90,
+            f"RMSE (AIMS4PT_cpx)\n= {wf_rmse:.2f} kbar",
             transform=ax.transAxes,
             **rmse_text_kwargs,
         )
@@ -3096,14 +3096,14 @@ def plot_temperature_residual_panel__nb03_c29(
         color='red', edgecolor='black', zorder=3,
     )
     legend_handles.append(sc_wf)
-    legend_labels.append("AIMS4PT_cpx  (this study)")
+    legend_labels.append("AIMS4PT_cpx (this study)")
     wf_slope, wf_intercept, wf_n_points = _calc_regression_fit__nb03_c29(T_real_, wf_residual)
     if np.isfinite(wf_slope):
         x_line = np.array([T_min, T_max], dtype=float)
         y_line = wf_slope * x_line + wf_intercept
         ax.plot(x_line, y_line, color="black", linewidth=2.8, zorder=4)
     slope_rows.append({
-        "model_name": "AIMS4PT_cpx  (this study)",
+        "model_name": "AIMS4PT_cpx (this study)",
         "slope": wf_slope,
         "intercept": wf_intercept,
         "n_points": wf_n_points,
@@ -3132,8 +3132,8 @@ def plot_temperature_residual_panel__nb03_c29(
                 bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor="none", alpha=0),
             )
         ax.text(
-            0.6, 0.90,
-            f"RMSE (AIMS4PT_cpx ) = {wf_rmse:.0f} °C",
+            0.75, 0.90,
+            f"RMSE (AIMS4PT_cpx)\n= {wf_rmse:.0f} °C",
             transform=ax.transAxes,
             **rmse_text_kwargs,
         )

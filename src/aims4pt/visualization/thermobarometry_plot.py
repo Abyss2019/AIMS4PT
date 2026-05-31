@@ -29,6 +29,24 @@ from aims4pt.toolkit_utils import wrap_text
 from aims4pt.visualization.plot_utils import get_subplot_shape
 
 
+MANUSCRIPT_AXIS_LABEL_SIZE = 17
+MANUSCRIPT_Y_AXIS_LABEL_SIZE = 18
+MANUSCRIPT_TICK_LABEL_SIZE = 14
+MANUSCRIPT_MODEL_TICK_LABEL_SIZE = 15
+MANUSCRIPT_GROUP_LABEL_SIZE = 17
+MANUSCRIPT_LEGEND_SIZE = 14
+MANUSCRIPT_PANEL_LABEL_SIZE = 19
+MANUSCRIPT_ANNOTATION_SIZE = 13
+MANUSCRIPT_RESERVOIR_LABEL_SIZE = 15
+MANUSCRIPT_THIS_STUDY_AXIS_LABEL_SIZE = 19
+MANUSCRIPT_THIS_STUDY_Y_AXIS_LABEL_SIZE = 20
+MANUSCRIPT_THIS_STUDY_TICK_LABEL_SIZE = 16
+MANUSCRIPT_THIS_STUDY_MODEL_TICK_LABEL_SIZE = 18
+MANUSCRIPT_THIS_STUDY_GROUP_LABEL_SIZE = 20
+MANUSCRIPT_THIS_STUDY_ANNOTATION_SIZE = 15
+MANUSCRIPT_THIS_STUDY_LEGEND_SIZE = 16
+
+
 def box_plot(data, P_T,  model_list, model_uncertainty=None, eruption_list=None, title=''):
     """
     Plot thermobarometry results as box plots for method comparison.
@@ -1266,6 +1284,22 @@ def _wrap_label(value: Any, width: int = 12, *, allow_word_break: bool = False) 
     return wrap_text(str(value), max_width=width, allow_word_break=allow_word_break)
 
 
+def _apply_threshold_xtick_rotation(
+    ax: plt.Axes,
+    raw_labels: Sequence[Any],
+    *,
+    rotation_threshold: int = 22,
+    long_label_fontsize_scale: float = 0.86,
+) -> None:
+    for tick_label, raw_label in zip(ax.get_xticklabels(), raw_labels):
+        tick_label.set_rotation(0)
+        tick_label.set_ha("center")
+        tick_label.set_va("top")
+        if len(str(raw_label)) > rotation_threshold:
+            tick_label.set_fontsize(tick_label.get_fontsize() * long_label_fontsize_scale)
+        tick_label.set_linespacing(0.95)
+
+
 def _pick_kind_mapping(mapping: Optional[Mapping[str, Any]], kind: str) -> Optional[Mapping[str, Any]]:
     if mapping is None:
         return None
@@ -1335,7 +1369,10 @@ def _model_axis_label(model_name: str, kind: Optional[str] = None, *, use_model_
         from paper.scripts.constants_illustration import get_model_abbreviation
     except Exception:
         return _short_model_name(model_name)
-    return get_model_abbreviation(model_name, kind)
+    label = get_model_abbreviation(model_name, kind)
+    if label == model_name:
+        return _short_model_name(model_name)
+    return label
 
 
 def _display_phase_type_label(value: Any) -> str:
@@ -1546,6 +1583,60 @@ def _annotate_above_data(
     )
 
 
+def _boxplot_whisker_bounds(data: Sequence[float], whis: float = 1.5) -> Optional[tuple[float, float]]:
+    clean_values = np.asarray(data, dtype=float)
+    clean_values = clean_values[np.isfinite(clean_values)]
+    if clean_values.size == 0:
+        return None
+    if clean_values.size <= 3:
+        return float(np.nanmin(clean_values)), float(np.nanmax(clean_values))
+
+    q1 = float(np.nanpercentile(clean_values, 25))
+    q3 = float(np.nanpercentile(clean_values, 75))
+    iqr = q3 - q1
+    if not np.isfinite(iqr) or iqr == 0:
+        return float(np.nanmin(clean_values)), float(np.nanmax(clean_values))
+
+    lower_fence = q1 - whis * iqr
+    upper_fence = q3 + whis * iqr
+    lower_whisker = float(np.nanmin(clean_values[clean_values >= lower_fence]))
+    upper_whisker = float(np.nanmax(clean_values[clean_values <= upper_fence]))
+    return lower_whisker, upper_whisker
+
+
+def _annotate_above_boxplot_whisker(
+    ax: plt.Axes,
+    x: float,
+    data: Sequence[float],
+    text: str,
+    color: str,
+    *,
+    y_pad_frac: float = 0.04,
+    fontsize: float = 14,
+    va: str = "bottom",
+    y_shift: float = 0.0,
+    whisker: str = "upper",
+) -> None:
+    bounds = _boxplot_whisker_bounds(data)
+    if bounds is None:
+        return
+    lower_whisker, upper_whisker = bounds
+    y_anchor = lower_whisker if whisker == "lower" else upper_whisker
+    y_min, y_max = ax.get_ylim()
+    y_pad = (y_max - y_min) * y_pad_frac
+    ax.text(
+        float(x),
+        y_anchor + y_pad + y_shift,
+        text,
+        color=color,
+        fontsize=fontsize,
+        fontweight="bold",
+        ha="center",
+        va=va,
+        zorder=10,
+    )
+
+
 def _annotate_grouped_box_label(
     ax: plt.Axes,
     x: float,
@@ -1577,8 +1668,15 @@ def _apply_pressure_depth_axes(
     pressure_ticks: Optional[Sequence[float]] = None,
     depth_tick_step: float = 5,
     depth_max: float = 37,
+    label_fontsize: float = MANUSCRIPT_Y_AXIS_LABEL_SIZE,
+    tick_labelsize: float = MANUSCRIPT_TICK_LABEL_SIZE,
+    depth_label_fontsize: Optional[float] = None,
+    depth_tick_labelsize: Optional[float] = None,
 ) -> plt.Axes:
-    ax.set_ylabel("Pressure (kbar)")
+    depth_label_fontsize = label_fontsize if depth_label_fontsize is None else depth_label_fontsize
+    depth_tick_labelsize = tick_labelsize if depth_tick_labelsize is None else depth_tick_labelsize
+
+    ax.set_ylabel("Pressure (kbar)", fontsize=label_fontsize)
     if pressure_ylim is not None:
         ax.set_ylim(*pressure_ylim)
     if pressure_ticks is not None:
@@ -1603,14 +1701,14 @@ def _apply_pressure_depth_axes(
     )
     ax_depth.yaxis.set_major_locator(FixedLocator(depth_ticks_km))
     ax_depth.set_yticklabels([f"{int(d)}" for d in depth_ticks_km])
-    ax_depth.set_ylabel("Depth (km)", rotation=-90, va="bottom", labelpad=8)
+    ax_depth.set_ylabel("Depth (km)", rotation=-90, va="bottom", labelpad=10, fontsize=depth_label_fontsize)
 
     ax.yaxis.set_minor_locator(AutoMinorLocator(2))
     ax_depth.yaxis.set_minor_locator(NullLocator())
     ax.tick_params(axis="y", which="minor", length=3, width=0.8)
-    ax.tick_params(axis="y", which="major", length=6, width=1.0)
+    ax.tick_params(axis="y", which="major", length=6, width=1.0, labelsize=tick_labelsize)
     ax_depth.tick_params(axis="y", which="minor", length=0)
-    ax_depth.tick_params(axis="y", which="major", length=6, width=1.0)
+    ax_depth.tick_params(axis="y", which="major", length=6, width=1.0, labelsize=depth_tick_labelsize)
     return ax_depth
 
 
@@ -1816,6 +1914,12 @@ def _plot_ranked_this_study_kind_panel(
     depth_tick_step: float = 5,
     depth_max: float = 37,
     use_model_abbreviations: bool = False,
+    axis_label_fontsize: float = MANUSCRIPT_AXIS_LABEL_SIZE,
+    y_axis_label_fontsize: float = MANUSCRIPT_Y_AXIS_LABEL_SIZE,
+    tick_labelsize: float = MANUSCRIPT_TICK_LABEL_SIZE,
+    model_tick_labelsize: float = MANUSCRIPT_MODEL_TICK_LABEL_SIZE,
+    group_label_fontsize: float = MANUSCRIPT_GROUP_LABEL_SIZE,
+    annotation_fontsize: float = MANUSCRIPT_ANNOTATION_SIZE,
 ) -> None:
     kind_state = state[kind]
     columns_all = kind_state["columns_all"]
@@ -1838,7 +1942,7 @@ def _plot_ranked_this_study_kind_panel(
     ax.minorticks_on()
     ax.yaxis.set_minor_locator(AutoMinorLocator(2))
     ax.tick_params(axis="y", which="minor", length=3, width=0.8)
-    ax.tick_params(axis="y", which="major", length=6, width=1.0)
+    ax.tick_params(axis="y", which="major", length=6, width=1.0, labelsize=tick_labelsize)
     ax.grid(True, which="major", axis="y", linestyle="-", linewidth=0.8, color="0.85", zorder=0)
     ax.grid(True, which="minor", axis="y", linestyle="-", linewidth=0.5, color="0.92", zorder=0)
 
@@ -1853,14 +1957,19 @@ def _plot_ranked_this_study_kind_panel(
         ],
         rotation=0,
         ha="center",
-        fontsize=14 if use_model_abbreviations else 12,
+        fontsize=model_tick_labelsize if use_model_abbreviations else tick_labelsize,
+    )
+    _apply_threshold_xtick_rotation(
+        ax,
+        [_model_axis_label(col, kind, use_model_abbreviations=use_model_abbreviations) for col in columns_all],
     )
     ax.xaxis.set_minor_locator(NullLocator())
     ax.tick_params(axis="x", which="minor", bottom=False, top=False)
+    ax.tick_params(axis="x", which="major", labelsize=model_tick_labelsize if use_model_abbreviations else tick_labelsize)
 
     ax.axvline(split_idx + 0.5, color="0.6", linewidth=1.0, zorder=1)
-    ax.text(split_idx / 2 + 0.5, 1.02, _display_phase_type_label("cpx_only"), transform=ax.get_xaxis_transform(), ha="center", va="bottom", fontsize=16, fontweight="bold")
-    ax.text((split_idx + n_cols) / 2 + 0.5, 1.02, _display_phase_type_label("cpx_liq"), transform=ax.get_xaxis_transform(), ha="center", va="bottom", fontsize=16, fontweight="bold")
+    ax.text(split_idx / 2 + 0.5, 1.025, _display_phase_type_label("cpx_only"), transform=ax.get_xaxis_transform(), ha="center", va="bottom", fontsize=group_label_fontsize, fontweight="bold")
+    ax.text((split_idx + n_cols) / 2 + 0.5, 1.025, _display_phase_type_label("cpx_liq"), transform=ax.get_xaxis_transform(), ha="center", va="bottom", fontsize=group_label_fontsize, fontweight="bold")
 
     vp06 = _draw_violin(
         ax,
@@ -1944,7 +2053,7 @@ def _plot_ranked_this_study_kind_panel(
                 f"{int(round(pct))}%",
                 selected_color if is_selected else "k",
                 y_pad_frac=y_pad_frac,
-                fontsize=14 if is_selected else 12,
+                fontsize=annotation_fontsize + 1 if is_selected else annotation_fontsize,
                 y_shift=y_shift,
             )
 
@@ -2007,9 +2116,13 @@ def _plot_ranked_this_study_kind_panel(
             depth_max=depth_max,
             densities_kg_m3=densities_kg_m3,
             layer_boundaries_km=layer_boundaries_km,
+            label_fontsize=y_axis_label_fontsize,
+            tick_labelsize=tick_labelsize,
         )
     else:
-        ax.set_ylabel("Temperature (°C)")
+        ax.set_ylabel("Temperature (°C)", fontsize=y_axis_label_fontsize)
+        ax.tick_params(axis="y", labelsize=tick_labelsize)
+    ax.xaxis.label.set_size(axis_label_fontsize)
 
 
 def _load_literature_table(data_or_path: Any, label: str) -> pd.DataFrame:
@@ -2222,7 +2335,16 @@ def _eruption_slot_offset(eruption: str, delta: float = 0.16) -> float:
     return 0.0
 
 
-def _add_category_and_type_bands(ax: plt.Axes, methods: Sequence[Mapping[str, Any]], x_positions: np.ndarray) -> None:
+def _add_category_and_type_bands(
+    ax: plt.Axes,
+    methods: Sequence[Mapping[str, Any]],
+    x_positions: np.ndarray,
+    *,
+    category_fontsize: float = MANUSCRIPT_GROUP_LABEL_SIZE,
+    type_fontsize: float = MANUSCRIPT_ANNOTATION_SIZE,
+    category_y: float = 1.04,
+    type_y: float = 0.985,
+) -> None:
     category_ranges = []
     start = 0
     for i in range(1, len(methods) + 1):
@@ -2234,7 +2356,16 @@ def _add_category_and_type_bands(ax: plt.Axes, methods: Sequence[Mapping[str, An
         x0 = x_positions[i0] - 0.5
         x1 = x_positions[i1] + 0.5
         xc = 0.5 * (x0 + x1)
-        ax.text(xc, 1.02, _wrap_label(category, width=14, allow_word_break=True), transform=ax.get_xaxis_transform(), ha="center", va="bottom", fontsize=14, fontweight="bold")
+        ax.text(
+            xc,
+            category_y,
+            _wrap_label(category, width=14, allow_word_break=True),
+            transform=ax.get_xaxis_transform(),
+            ha="center",
+            va="bottom",
+            fontsize=category_fontsize,
+            fontweight="bold",
+        )
         if j < len(category_ranges) - 1:
             ax.axvline(x1, color="0.60", lw=1.2, zorder=1)
 
@@ -2252,7 +2383,16 @@ def _add_category_and_type_bands(ax: plt.Axes, methods: Sequence[Mapping[str, An
         x1 = x_positions[i1] + 0.5
         ax.axvspan(x0, x1, color="white", alpha=1.0, zorder=0)
         xc = 0.5 * (x0 + x1)
-        ax.text(xc, 0.98, _wrap_label(method_type, width=14, allow_word_break=True), transform=ax.get_xaxis_transform(), ha="center", va="top", fontsize=11, color="0.20")
+        ax.text(
+            xc,
+            type_y,
+            _wrap_label(method_type, width=14, allow_word_break=True),
+            transform=ax.get_xaxis_transform(),
+            ha="center",
+            va="top",
+            fontsize=type_fontsize,
+            color="0.20",
+        )
         ax.axvline(x0, color="0.93", lw=0.9, zorder=1)
         ax.axvline(x1, color="0.93", lw=0.9, zorder=1)
 
@@ -2263,8 +2403,31 @@ def _add_pressure_reservoir_bands(
     *,
     densities_kg_m3: Optional[Sequence[float]] = None,
     layer_boundaries_km: Optional[Sequence[float]] = None,
+    label_fontsize: float = MANUSCRIPT_RESERVOIR_LABEL_SIZE,
+    label_x: Optional[float] = None,
 ) -> None:
-    transform = blended_transform_factory(ax.transAxes, ax.transData)
+    if label_x is None:
+        transform = blended_transform_factory(ax.transAxes, ax.transData)
+        x_text = 0.985
+        ha = "left"
+        clip_on = True
+    else:
+        transform = ax.transData
+        x_text = float(label_x)
+        ha = "right"
+        clip_on = True
+
+    def _format_reservoir_label(raw_label: str) -> str:
+        label = raw_label.strip()
+        for token in (" km ", "km "):
+            if token in label:
+                label = label.split(token, 1)[1].strip()
+                break
+        label = label.removeprefix("<").removeprefix(">").strip()
+        if label.endswith("-crustal"):
+            label = f"{label}\nreservoir"
+        return label
+
     for band in reservoir_bands:
         min_depth = band.get("min_depth_km", band.get("min km"))
         max_depth = band.get("max_depth_km", band.get("max km"))
@@ -2297,17 +2460,17 @@ def _add_pressure_reservoir_bands(
         )
         if label:
             ax.text(
-                1.01,
+                x_text,
                 0.5 * (y0 + y1),
-                label,
+                _format_reservoir_label(label),
                 transform=transform,
-                ha="left",
+                ha=ha,
                 va="center",
-                fontsize=10,
+                fontsize=label_fontsize,
+                fontweight="bold",
                 color=band.get("text_color", "0.20"),
-                bbox=dict(boxstyle="round,pad=0.15", facecolor="white", edgecolor="none", alpha=0.55),
                 zorder=1.6,
-                clip_on=False,
+                clip_on=clip_on,
             )
 
 
@@ -2392,7 +2555,7 @@ def _build_this_study_columns_for_comparison(
                     raise KeyError(f"{kind} results {year} {phase_type} are missing column {model_name!r}.")
                 columns.append(
                     {
-                        "category": "this study",
+                        "category": "This study",
                         "type": phase_type,
                         "eruption": year,
                         "model": model_name,
@@ -2431,7 +2594,7 @@ def _build_this_study_columns_for_comparison(
         if liquid_subcolumns:
             columns.append(
                 {
-                    "category": "this study",
+                    "category": "This study",
                     "type": "liquid",
                     "label": "Weber & Blundy, 2024",
                     "subcolumns": liquid_subcolumns,
@@ -2446,6 +2609,7 @@ def _plot_this_study_boxes_on_comparison(
     this_cols: Sequence[Mapping[str, Any]],
     *,
     kind: str,
+    annotation_fontsize: float = MANUSCRIPT_ANNOTATION_SIZE,
 ) -> Optional[Mapping[str, Any]]:
     if len(this_cols) == 0:
         return None
@@ -2500,7 +2664,7 @@ def _plot_this_study_boxes_on_comparison(
                     label_y = float(np.nanmin(phase_concat) - y_pad)
                 else:
                     label_y = float(np.nanmax(phase_concat) + y_pad)
-                _annotate_grouped_box_label(ax, label_x, label_y, phase_label, color="0.15")
+                _annotate_grouped_box_label(ax, label_x, label_y, phase_label, fontsize=annotation_fontsize, color="0.15")
             continue
 
         last_bp = ax.boxplot([col["data"]], positions=[x_center], widths=0.20, showfliers=False, patch_artist=True)
@@ -2518,7 +2682,15 @@ def _plot_this_study_boxes_on_comparison(
         pct = col.get("pct")
         if pct is not None:
             y_pad_frac = 0.06 if kind == "P" else 0.03
-            _annotate_above_data(ax, x_center, col["data"], f"{int(round(pct))}%", col["fill"], y_pad_frac=y_pad_frac, fontsize=12)
+            _annotate_above_boxplot_whisker(
+                ax,
+                x_center,
+                col["data"],
+                f"{int(round(pct))}%",
+                col["fill"],
+                y_pad_frac=y_pad_frac,
+                fontsize=annotation_fontsize,
+            )
 
     return last_bp
 
@@ -2546,7 +2718,13 @@ def _format_melts_note(note: Any) -> str:
     return _wrap_label(note_clean, width=14)
 
 
-def _draw_melts_modeling_column(ax: plt.Axes, xi: float, eruptions: Sequence[Mapping[str, Any]]) -> None:
+def _draw_melts_modeling_column(
+    ax: plt.Axes,
+    xi: float,
+    eruptions: Sequence[Mapping[str, Any]],
+    *,
+    text_fontsize: float = MANUSCRIPT_ANNOTATION_SIZE,
+) -> None:
     melts_points = []
     for eruption_item in eruptions:
         for range_min, range_max in eruption_item["ranges"]:
@@ -2567,7 +2745,7 @@ def _draw_melts_modeling_column(ax: plt.Axes, xi: float, eruptions: Sequence[Map
 
     for idx, point in enumerate(melts_points):
         y = point["y"]
-        ax.text(xi, y, point["label"], fontsize=12, color="0.10", ha="center", va="center", zorder=4, clip_on=True)
+        ax.text(xi, y, point["label"], fontsize=text_fontsize, color="0.10", ha="center", va="center", zorder=4, clip_on=True)
 
         arrow_start = y - 7.0
         if idx < len(melts_points) - 1:
@@ -2596,6 +2774,7 @@ def _plot_ranked_literature_panel(
     selection_threshold: float,
     add_literature_legend: bool,
     pressure_ylim: Optional[tuple[float, float]] = None,
+    temperature_ylim: Optional[tuple[float, float]] = None,
     pressure_ticks: Optional[Sequence[float]] = None,
     densities_kg_m3: Optional[Sequence[float]] = None,
     layer_boundaries_km: Optional[Sequence[float]] = None,
@@ -2604,6 +2783,14 @@ def _plot_ranked_literature_panel(
     depth_max: float = 37,
     use_model_abbreviations: bool = False,
     pressure_reservoir_bands: Optional[Sequence[Mapping[str, Any]]] = None,
+    axis_label_fontsize: float = MANUSCRIPT_AXIS_LABEL_SIZE,
+    y_axis_label_fontsize: float = MANUSCRIPT_Y_AXIS_LABEL_SIZE,
+    tick_labelsize: float = MANUSCRIPT_TICK_LABEL_SIZE,
+    model_tick_labelsize: float = MANUSCRIPT_MODEL_TICK_LABEL_SIZE,
+    group_label_fontsize: float = MANUSCRIPT_GROUP_LABEL_SIZE,
+    legend_fontsize: float = MANUSCRIPT_LEGEND_SIZE,
+    annotation_fontsize: float = MANUSCRIPT_ANNOTATION_SIZE,
+    reservoir_label_fontsize: float = MANUSCRIPT_RESERVOIR_LABEL_SIZE,
 ) -> None:
     this_cols = _build_this_study_columns_for_comparison(
         kind,
@@ -2621,18 +2808,34 @@ def _plot_ranked_literature_panel(
 
     methods_all = _build_methods_for_bands(this_cols, lit_methods)
     x_all = np.arange(1, len(methods_all) + 1)
-    _add_category_and_type_bands(ax, methods_all, x_all)
+    reservoir_label_x = None
+    if kind == "P" and pressure_reservoir_bands:
+        reservoir_label_x = len(methods_all) + 1.45
+    _add_category_and_type_bands(
+        ax,
+        methods_all,
+        x_all,
+        category_fontsize=group_label_fontsize,
+        type_fontsize=annotation_fontsize,
+    )
     if kind == "P" and pressure_reservoir_bands:
         _add_pressure_reservoir_bands(
             ax,
             pressure_reservoir_bands,
             densities_kg_m3=densities_kg_m3,
             layer_boundaries_km=layer_boundaries_km,
+            label_fontsize=reservoir_label_fontsize,
+            label_x=reservoir_label_x,
         )
 
     n_this = len(this_cols)
     if n_this > 0:
-        _plot_this_study_boxes_on_comparison(ax, this_cols, kind=kind)
+        _plot_this_study_boxes_on_comparison(
+            ax,
+            this_cols,
+            kind=kind,
+            annotation_fontsize=annotation_fontsize,
+        )
 
     if len(lit_methods) > 0:
         x_lit = np.arange(1, len(lit_methods) + 1) + n_this
@@ -2641,7 +2844,7 @@ def _plot_ranked_literature_panel(
             thermobarometer_text = _clean_str(method.get("thermobatometer"))
 
             if _is_melts_modeling_method(method, kind):
-                _draw_melts_modeling_column(ax, xi, method["eruptions"])
+                _draw_melts_modeling_column(ax, xi, method["eruptions"], text_fontsize=annotation_fontsize)
                 continue
 
             for eruption_item in method["eruptions"]:
@@ -2696,7 +2899,7 @@ def _plot_ranked_literature_panel(
                             xk,
                             y_text,
                             _wrap_label(thermobarometer_text, width=14),
-                            fontsize=11,
+                            fontsize=annotation_fontsize,
                             color="0.20",
                             ha="center",
                             va="bottom",
@@ -2704,11 +2907,21 @@ def _plot_ranked_literature_panel(
                             clip_on=True,
                         )
 
-    ax.set_xlim(0.5, len(methods_all) + 0.5)
+    x_right = len(methods_all) + (1.55 if reservoir_label_x is not None else 0.5)
+    ax.set_xlim(0.5, x_right)
     ax.set_xticks(x_all)
-    ax.set_xticklabels([_wrap_label(method["label"], width=14) for method in methods_all], rotation=0, ha="center", fontsize=11)
+    raw_xtick_labels = [method["label"] for method in methods_all]
+    xtick_labels = [_wrap_label(label, width=12) for label in raw_xtick_labels]
+    ax.set_xticklabels(
+        xtick_labels,
+        rotation=0,
+        ha="center",
+        fontsize=model_tick_labelsize if use_model_abbreviations else tick_labelsize,
+    )
     ax.xaxis.set_minor_locator(NullLocator())
     ax.tick_params(axis="x", which="minor", bottom=False, top=False)
+    ax.tick_params(axis="x", which="major", labelsize=model_tick_labelsize if use_model_abbreviations else tick_labelsize)
+    _apply_threshold_xtick_rotation(ax, raw_xtick_labels)
 
     ax.minorticks_on()
     ax.yaxis.set_minor_locator(AutoMinorLocator(2))
@@ -2724,9 +2937,15 @@ def _plot_ranked_literature_panel(
             depth_max=depth_max,
             densities_kg_m3=densities_kg_m3,
             layer_boundaries_km=layer_boundaries_km,
+            label_fontsize=y_axis_label_fontsize,
+            tick_labelsize=tick_labelsize,
         )
     else:
-        ax.set_ylabel("Temperature (°C)")
+        ax.set_ylabel("Temperature (°C)", fontsize=y_axis_label_fontsize)
+        if temperature_ylim is not None:
+            ax.set_ylim(*temperature_ylim)
+        ax.tick_params(axis="y", labelsize=tick_labelsize)
+    ax.xaxis.label.set_size(axis_label_fontsize)
 
     if add_literature_legend:
         handles = [
@@ -2736,22 +2955,47 @@ def _plot_ranked_literature_panel(
             Line2D([0], [0], color="blue", lw=4.0, label="2006 (literature)"),
             Line2D([0], [0], color="red", lw=4.0, label="2010 (literature)"),
         ]
-        ax.legend(handles=handles, loc="lower left", bbox_to_anchor=(0.02, 0.02), frameon=True, ncol=2)
+        ax.legend(
+            handles=handles,
+            loc="lower left",
+            bbox_to_anchor=(0.005, 0.02),
+            frameon=True,
+            ncol=3,
+            fontsize=legend_fontsize,
+            borderpad=0.35,
+            handlelength=1.6,
+            handletextpad=0.5,
+        )
 
 
 def _apply_this_study_axis_font_sizes(
     fig: plt.Figure,
     *,
-    labelsize: float = 14,
-    tick_labelsize: float = 12,
+    labelsize: float = MANUSCRIPT_THIS_STUDY_AXIS_LABEL_SIZE,
+    y_labelsize: float = MANUSCRIPT_THIS_STUDY_Y_AXIS_LABEL_SIZE,
+    tick_labelsize: float = MANUSCRIPT_THIS_STUDY_TICK_LABEL_SIZE,
+    model_tick_labelsize: float = MANUSCRIPT_THIS_STUDY_MODEL_TICK_LABEL_SIZE,
+    legend_fontsize: float = MANUSCRIPT_THIS_STUDY_LEGEND_SIZE,
 ) -> None:
     for ax in fig.axes:
         ax.xaxis.label.set_size(labelsize)
-        ax.yaxis.label.set_size(labelsize)
+        ax.yaxis.label.set_size(y_labelsize)
         ax.tick_params(axis="both", labelsize=tick_labelsize)
+        ax.tick_params(axis="x", labelsize=model_tick_labelsize)
+        legend = ax.get_legend()
+        if legend is not None:
+            for text in legend.get_texts():
+                text.set_fontsize(legend_fontsize)
 
 
-def _add_panel_label(ax: plt.Axes, label: str, *, x: float = -0.055, y: float = 1.04, fontsize: float = 19) -> None:
+def _add_panel_label(
+    ax: plt.Axes,
+    label: str,
+    *,
+    x: float = -0.06,
+    y: float = 1.045,
+    fontsize: float = MANUSCRIPT_PANEL_LABEL_SIZE,
+) -> None:
     ax.text(
         x,
         y,
@@ -2839,6 +3083,12 @@ def plot_ranked_thermobarometry_this_study(
         depth_tick_step=depth_tick_step,
         depth_max=depth_max,
         use_model_abbreviations=use_model_abbreviations,
+        axis_label_fontsize=MANUSCRIPT_THIS_STUDY_AXIS_LABEL_SIZE,
+        y_axis_label_fontsize=MANUSCRIPT_THIS_STUDY_Y_AXIS_LABEL_SIZE,
+        tick_labelsize=MANUSCRIPT_THIS_STUDY_TICK_LABEL_SIZE,
+        model_tick_labelsize=MANUSCRIPT_THIS_STUDY_MODEL_TICK_LABEL_SIZE,
+        group_label_fontsize=MANUSCRIPT_THIS_STUDY_GROUP_LABEL_SIZE,
+        annotation_fontsize=MANUSCRIPT_THIS_STUDY_ANNOTATION_SIZE,
     )
     _plot_ranked_this_study_kind_panel(
         axes[1],
@@ -2848,6 +3098,12 @@ def plot_ranked_thermobarometry_this_study(
         depth_tick_step=depth_tick_step,
         depth_max=depth_max,
         use_model_abbreviations=use_model_abbreviations,
+        axis_label_fontsize=MANUSCRIPT_THIS_STUDY_AXIS_LABEL_SIZE,
+        y_axis_label_fontsize=MANUSCRIPT_THIS_STUDY_Y_AXIS_LABEL_SIZE,
+        tick_labelsize=MANUSCRIPT_THIS_STUDY_TICK_LABEL_SIZE,
+        model_tick_labelsize=MANUSCRIPT_THIS_STUDY_MODEL_TICK_LABEL_SIZE,
+        group_label_fontsize=MANUSCRIPT_THIS_STUDY_GROUP_LABEL_SIZE,
+        annotation_fontsize=MANUSCRIPT_THIS_STUDY_ANNOTATION_SIZE,
     )
 
     if add_legend:
@@ -2856,7 +3112,16 @@ def plot_ranked_thermobarometry_this_study(
             Patch(facecolor="red", edgecolor="k", alpha=1.0, label="2010 eruption"),
             Patch(facecolor="white", edgecolor="k", linestyle="--", linewidth=3.0, label="Selected model"),
         ]
-        axes[0].legend(handles=legend_items, loc="upper right", ncol=2, frameon=True, fontsize=12)
+        axes[0].legend(
+            handles=legend_items,
+            bbox_to_anchor=(0.02, 0.98),
+            ncol=2,
+            frameon=True,
+            fontsize=MANUSCRIPT_THIS_STUDY_LEGEND_SIZE,
+            borderpad=0.35,
+            handlelength=1.6,
+            handletextpad=0.5,
+        )
 
     if panel_labels:
         _add_panel_label(axes[0], panel_labels[0])
@@ -2884,6 +3149,7 @@ def plot_ranked_thermobarometry_literature_comparison(
     liquid_results: Optional[Mapping[str, Any]] = None,
     selection_threshold: float = 50.0,
     pressure_ylim: Optional[tuple[float, float]] = None,
+    temperature_ylim: Optional[tuple[float, float]] = (900, 1200),
     pressure_ticks: Optional[Sequence[float]] = None,
     densities_kg_m3: Optional[Sequence[float]] = None,
     layer_boundaries_km: Optional[Sequence[float]] = None,
@@ -2949,6 +3215,7 @@ def plot_ranked_thermobarometry_literature_comparison(
         temperature_literature_df,
         selection_threshold=selection_threshold,
         add_literature_legend=False,
+        temperature_ylim=temperature_ylim,
         depth_tick_step=depth_tick_step,
         depth_max=depth_max,
         use_model_abbreviations=use_model_abbreviations,
@@ -2994,6 +3261,7 @@ def plot_ranked_thermobarometry_summary(
     liquid_results: Optional[Mapping[str, Any]] = None,
     selection_threshold: float = 50.0,
     pressure_ylim: Optional[tuple[float, float]] = None,
+    temperature_ylim: Optional[tuple[float, float]] = (900, 1150),
     pressure_ticks: Optional[Sequence[float]] = None,
     densities_kg_m3: Optional[Sequence[float]] = None,
     layer_boundaries_km: Optional[Sequence[float]] = None,
@@ -3057,6 +3325,7 @@ def plot_ranked_thermobarometry_summary(
             liquid_results=liquid_results,
             selection_threshold=selection_threshold,
             pressure_ylim=pressure_ylim,
+            temperature_ylim=temperature_ylim,
             pressure_ticks=pressure_ticks,
             densities_kg_m3=densities_kg_m3,
             layer_boundaries_km=layer_boundaries_km,
