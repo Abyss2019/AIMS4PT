@@ -55,7 +55,7 @@ A lightweight web interface is available for users who prefer a graphical workfl
 For local use, install the web dependencies:
 
 ```bash
-pip install -e ".[web]"
+pip install ".[web]"
 ```
 
 Then run the server locally with:
