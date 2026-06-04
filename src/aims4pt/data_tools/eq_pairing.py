@@ -48,6 +48,7 @@ from typing import Optional, Literal
 import numpy as np
 import pandas as pd
 
+from aims4pt.constants import OXIDES_MOLE_MASS
 from aims4pt.data_tools.equilibrium import kdEquilibrium_test
 
 LiqInterpMode = Literal["between", "endmembers"]
@@ -79,11 +80,11 @@ def _plot_liquid_pool_diagnostics(
     alpha_selected: float = 0.98,
 ) -> None:
     """
-    SiO2–MgO bivariate diagnostic plot.
+    SiO2-Mg# bivariate diagnostic plot.
 
     Strict assumptions (no guessing, no renaming):
       - Inputs already normalized upstream.
-      - Columns 'SiO2' and 'MgO' exist and are value columns (wt%).
+      - Columns 'SiO2', 'MgO', and 'FeO' exist and are value columns (wt%).
       - No column-name guessing is performed.
       - No repeated normalization is performed.
 
@@ -99,25 +100,34 @@ def _plot_liquid_pool_diagnostics(
         ("X_liq_pool", X_liq_pool),
         ("cleaned_liquids", cleaned_liquids),
     ]:
-        if "SiO2" not in df.columns or "MgO" not in df.columns:
+        required_cols = ["SiO2", "MgO", "FeO"]
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
             raise KeyError(
-                f"{df_name} must contain columns 'SiO2' and 'MgO' after normalization. "
+                f"{df_name} must contain columns {required_cols} after normalization. "
+                f"Missing columns: {missing_cols}. "
                 f"Got columns head: {list(df.columns)[:30]}"
             )
 
+    def add_liq_mg_number(df: pd.DataFrame) -> pd.DataFrame:
+        """Calculate liquid Mg# as molar Mg / (Mg + Fe)."""
+        out = df[["SiO2", "MgO", "FeO"]].copy()
+        out = out.replace([np.inf, -np.inf], np.nan)
+        mg_mol = out["MgO"] / OXIDES_MOLE_MASS["MgO"]
+        fe_mol = out["FeO"] / OXIDES_MOLE_MASS["FeO"]
+        out["Mg#"] = mg_mol / (mg_mol + fe_mol)
+        return out[["SiO2", "Mg#"]].dropna()
+
     # Prepare layers
-    orig = X_liq_original[["SiO2", "MgO"]].copy()
-    orig = orig.replace([np.inf, -np.inf], np.nan).dropna()
+    orig = add_liq_mg_number(X_liq_original)
 
     synth = None
     if "liq__is_synthetic" in X_liq_pool.columns:
-        synth = X_liq_pool.loc[X_liq_pool["liq__is_synthetic"].astype(bool), ["SiO2", "MgO"]].copy()
-        synth = synth.replace([np.inf, -np.inf], np.nan).dropna()
+        synth = add_liq_mg_number(X_liq_pool.loc[X_liq_pool["liq__is_synthetic"].astype(bool)])
         if len(synth) == 0:
             synth = None
 
-    selected = cleaned_liquids[["SiO2", "MgO"]].copy()
-    selected = selected.replace([np.inf, -np.inf], np.nan).dropna()
+    selected = add_liq_mg_number(cleaned_liquids)
 
     # Plot
     plt.figure(figsize=fig_size, dpi=fig_dpi)
@@ -126,7 +136,7 @@ def _plot_liquid_pool_diagnostics(
     # (1) synthetic (least emphasis)
     if synth is not None:
         ax.scatter(
-            synth["SiO2"], synth["MgO"],
+            synth["SiO2"], synth["Mg#"],
             s=s_synth,
             alpha=alpha_synth,
             marker="o",
@@ -137,7 +147,7 @@ def _plot_liquid_pool_diagnostics(
 
     # (2) original (more emphasis)
     ax.scatter(
-        orig["SiO2"], orig["MgO"],
+        orig["SiO2"], orig["Mg#"],
         s=s_original,
         alpha=alpha_original,
         marker="o",
@@ -148,7 +158,7 @@ def _plot_liquid_pool_diagnostics(
 
     # (3) selected equilibrium (most emphasis)
     ax.scatter(
-        selected["SiO2"], selected["MgO"],
+        selected["SiO2"], selected["Mg#"],
         s=s_selected,
         alpha=alpha_selected,
         marker="x",
@@ -158,7 +168,7 @@ def _plot_liquid_pool_diagnostics(
     )
 
     ax.set_xlabel("SiO2 (wt%)")
-    ax.set_ylabel("MgO (wt%)")
+    ax.set_ylabel("Mg#")
     ax.grid(True, alpha=0.22)
     ax.legend(
         loc="best",
