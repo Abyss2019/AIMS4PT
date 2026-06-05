@@ -4,13 +4,13 @@ from __future__ import annotations
 
 
 # Shared manuscript figure font sizes.
-AXIS_LABEL_SIZE = 16
-Y_AXIS_LABEL_SIZE = 16
-TICK_LABEL_SIZE = 13
-MODEL_TICK_LABEL_SIZE = 14
-PANEL_TITLE_SIZE = 15
-TITLE_SIZE = 17
-LEGEND_FONT_SIZE = 12
+AXIS_LABEL_SIZE = 17
+Y_AXIS_LABEL_SIZE = 17
+TICK_LABEL_SIZE = 14
+MODEL_TICK_LABEL_SIZE = 16
+PANEL_TITLE_SIZE = 17
+TITLE_SIZE = 18
+LEGEND_FONT_SIZE = 13
 
 
 # Model-name to Table 1 abbreviation maps. Pressure and temperature are kept

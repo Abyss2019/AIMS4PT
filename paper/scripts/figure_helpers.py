@@ -115,6 +115,83 @@ def add_panel_label_yaxis_aligned(
     )
 
 
+def add_shap_importance_arrow__nb03_c18(
+    ax,
+    *,
+    x=0.89,
+    y_low=0.15,
+    y_high=0.58,
+    fontsize=12,
+    color="0.15",
+):
+    """Add a vertical importance arrow inside a SHAP summary panel."""
+    ax.annotate(
+        "",
+        xy=(x, y_high),
+        xytext=(x, y_low),
+        xycoords="axes fraction",
+        arrowprops=dict(arrowstyle="-|>", color=color, lw=2.5),
+        zorder=20,
+        clip_on=False,
+    )
+    ax.text(
+        x,
+        y_high + 0.01,
+        "Higher\nimportance",
+        transform=ax.transAxes,
+        ha="center",
+        va="bottom",
+        fontsize=fontsize,
+        color=color,
+        linespacing=0.9,
+        zorder=20,
+    )
+    ax.text(
+        x,
+        y_low - 0.01,
+        "Lower\nimportance",
+        transform=ax.transAxes,
+        ha="center",
+        va="top",
+        fontsize=fontsize,
+        color=color,
+        linespacing=0.9,
+        zorder=20,
+    )
+
+
+def add_shared_feature_value_colorbar__nb03_c18(
+    fig,
+    axes,
+    *,
+    cmap=plt.cm.coolwarm,
+    label="Feature value",
+    labelsize=15,
+    tick_labelsize=13,
+    location="right",
+    fraction=0.030,
+    pad=0.025,
+):
+    """Add one shared low-high colorbar for per-feature normalized SHAP colors."""
+    from matplotlib import colors as mcolors
+    from matplotlib.cm import ScalarMappable
+
+    sm = ScalarMappable(norm=mcolors.Normalize(vmin=0, vmax=1), cmap=cmap)
+    sm.set_array([])
+    cbar = fig.colorbar(
+        sm,
+        ax=np.ravel(axes).tolist(),
+        location=location,
+        fraction=fraction,
+        pad=pad,
+    )
+    cbar.set_label(label, fontsize=labelsize)
+    cbar.set_ticks([0, 1])
+    cbar.set_ticklabels(["Low", "High"])
+    cbar.ax.tick_params(labelsize=tick_labelsize)
+    return cbar
+
+
 
 COL_REFERENCE__nb03_c03 = "0.70"
 COL_ID__nb03_c03 = "C2"
@@ -401,7 +478,6 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 from aims4pt.visualization.composition_plot import plot_glass_TAS_diagram
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 required_base__nb00_c16 = ["unseen_experiments_df", "cpx_names", "liq_names", "P_col", "T_col"]
 missing_base__nb00_c16 = [name for name in required_base__nb00_c16 if name not in globals()]
 required_split__nb00_c16 = ["meta_unseen", "cpx_unseen", "liq_unseen", "training_unseen_id", "testing_unseen_id"]
@@ -423,7 +499,6 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 from aims4pt.visualization.composition_plot import plot_glass_TAS_diagram
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 required_base__nb00_c18 = ["unseen_experiments_df", "cpx_names", "liq_names", "P_col", "T_col"]
 missing_base__nb00_c18 = [name for name in required_base__nb00_c18 if name not in globals()]
 required_split__nb00_c18 = ["meta_unseen", "cpx_unseen", "liq_unseen", "training_unseen_id", "testing_unseen_id"]
@@ -448,6 +523,220 @@ def _get_agreda_reference_model__nb00_c18(T_P):
 
     from aims4pt.model_tools.Agreda2024 import Agreda2024
     return Agreda2024(T_P=T_P, cpx_only=True)
+
+def plot_independent_pt_distribution__nb00_c18(
+    meta_unseen,
+    training_unseen_id,
+    testing_unseen_id,
+    T_col,
+    P_col,
+    agreda_reference_pt,
+    *,
+    agreda_reference_liq=None,
+    liq_unseen=None,
+    reference_label="Agreda-Lopez et al. (2024)",
+    figsize=None,
+    dpi=250,
+):
+    """Plot the independent-dataset P-T panel and, when available, the main TAS panel."""
+    include_tas_panel = agreda_reference_liq is not None and liq_unseen is not None
+    if figsize is None:
+        figsize = (9.0, 12.0) if include_tas_panel else (8.4, 6.5)
+    if include_tas_panel:
+        fig, (ax_pt, ax_tas) = plt.subplots(
+            nrows=2,
+            ncols=1,
+            figsize=figsize,
+            dpi=dpi,
+            sharex=False,
+            layout="constrained",
+        )
+    else:
+        fig, ax_pt = plt.subplots(1, 1, figsize=figsize, dpi=dpi, layout="constrained")
+        ax_tas = None
+
+    ref = agreda_reference_pt.dropna(subset=["T_C", "P_kbar"])
+    if len(ref) >= 3:
+        sns.kdeplot(
+            x=ref["T_C"],
+            y=ref["P_kbar"],
+            linewidth=0.9,
+            fill=True,
+            color="#D8D2E3",
+            alpha=0.55,
+            ax=ax_pt,
+            zorder=0,
+            levels=4,
+        )
+        sns.kdeplot(
+            x=ref["T_C"],
+            y=ref["P_kbar"],
+            linewidth=1.5,
+            fill=False,
+            color="0.55",
+            alpha=0.9,
+            ax=ax_pt,
+            zorder=1,
+            levels=4,
+        )
+
+    training = meta_unseen.loc[training_unseen_id]
+    testing = meta_unseen.loc[testing_unseen_id]
+    if len(training) >= 3:
+        sns.kdeplot(
+            data=training,
+            x=T_col,
+            y=P_col,
+            levels=5,
+            linewidth=2.0,
+            color="#C2185B",
+            alpha=0.9,
+            ax=ax_pt,
+            zorder=2,
+        )
+
+    ax_pt.scatter(
+        training[T_col],
+        training[P_col],
+        alpha=1,
+        label=f"Training subset (N={len(training_unseen_id)})",
+        marker="o",
+        s=46,
+        edgecolors="k",
+        linewidths=0.6,
+        zorder=3,
+    )
+    ax_pt.scatter(
+        testing[T_col],
+        testing[P_col],
+        alpha=1,
+        label=f"Testing subset (N={len(testing_unseen_id)})",
+        marker="D",
+        s=46,
+        edgecolors="k",
+        linewidths=0.6,
+        zorder=4,
+    )
+
+    ax_pt.set_xlabel(r"Temperature ($^\circ$C)")
+    ax_pt.set_ylabel("Pressure (kbar)")
+    pt_handles, pt_labels = ax_pt.get_legend_handles_labels()
+    ref_handle = Line2D([0], [0], color="0.55", lw=1.4, label=reference_label)
+    ax_pt.legend(
+        [ref_handle, *pt_handles],
+        [reference_label, *pt_labels],
+        loc="upper left",
+        frameon=False,
+        fontsize=LEGEND_FONT_SIZE,
+        bbox_to_anchor=(0.01, 0.99),
+        bbox_transform=ax_pt.transAxes,
+    )
+    ax_pt.grid(True, color="0.92", linewidth=0.5, zorder=0)
+    add_panel_label_yaxis_aligned(ax_pt, "(a)", bbox=False)
+
+    if not include_tas_panel:
+        return fig, ax_pt
+
+    tas_cols = ["SiO2_liq", "Na2O_liq", "K2O_liq"]
+    missing_tas = [col for col in tas_cols if col not in agreda_reference_liq.columns or col not in liq_unseen.columns]
+    if missing_tas:
+        raise KeyError(f"TAS panel requires these liquid columns in both datasets: {missing_tas}")
+
+    alkaline_wt = pd.to_numeric(liq_unseen["Na2O_liq"], errors="coerce") + pd.to_numeric(
+        liq_unseen["K2O_liq"], errors="coerce"
+    )
+    sio2_wt = pd.to_numeric(liq_unseen["SiO2_liq"], errors="coerce")
+    agreda_alkaline_wt = pd.to_numeric(agreda_reference_liq["Na2O_liq"], errors="coerce") + pd.to_numeric(
+        agreda_reference_liq["K2O_liq"], errors="coerce"
+    )
+    agreda_sio2_wt = pd.to_numeric(agreda_reference_liq["SiO2_liq"], errors="coerce")
+    agreda_tas_mask = np.isfinite(agreda_sio2_wt) & np.isfinite(agreda_alkaline_wt)
+
+    if agreda_tas_mask.sum() >= 3:
+        sns.kdeplot(
+            x=agreda_sio2_wt.loc[agreda_tas_mask],
+            y=agreda_alkaline_wt.loc[agreda_tas_mask],
+            linewidth=0.9,
+            fill=True,
+            color="#D8D2E3",
+            alpha=0.55,
+            ax=ax_tas,
+            zorder=0,
+            levels=4,
+        )
+        sns.kdeplot(
+            x=agreda_sio2_wt.loc[agreda_tas_mask],
+            y=agreda_alkaline_wt.loc[agreda_tas_mask],
+            linewidth=1.2,
+            fill=False,
+            color="0.55",
+            alpha=0.9,
+            ax=ax_tas,
+            zorder=1,
+            levels=4,
+        )
+
+    training_sio2 = sio2_wt.loc[training_unseen_id]
+    training_alkali = alkaline_wt.loc[training_unseen_id]
+    training_tas_mask = np.isfinite(training_sio2) & np.isfinite(training_alkali)
+    if training_tas_mask.sum() >= 3:
+        sns.kdeplot(
+            x=training_sio2.loc[training_tas_mask],
+            y=training_alkali.loc[training_tas_mask],
+            levels=5,
+            linewidth=2.0,
+            color="#C2185B",
+            alpha=0.9,
+            ax=ax_tas,
+            zorder=2,
+        )
+
+    ax_tas.scatter(
+        training_sio2,
+        training_alkali,
+        color="C0",
+        label=f"Training subset (N={len(training_unseen_id)})",
+        marker="o",
+        s=46,
+        linewidth=0.6,
+        edgecolors="k",
+        alpha=1,
+        zorder=3,
+    )
+    ax_tas.scatter(
+        sio2_wt.loc[testing_unseen_id],
+        alkaline_wt.loc[testing_unseen_id],
+        color="C1",
+        marker="D",
+        label=f"Testing subset (N={len(testing_unseen_id)})",
+        s=46,
+        linewidth=0.6,
+        edgecolors="k",
+        alpha=1,
+        zorder=4,
+    )
+
+    y_min, y_max = (0, 16)
+    ys = np.linspace(y_min, y_max, 100)
+    alkaline_boundary = (
+        -3.3539e-4 * ys**6
+        + 1.2030e-2 * ys**5
+        - 1.5188e-1 * ys**4
+        + 8.6096e-1 * ys**3
+        - 2.1111 * ys**2
+        + 3.9492 * ys
+        + 39.0
+    )
+    ax_tas.plot(alkaline_boundary, ys, color="black", linestyle="--", linewidth=3.0, alpha=0.8)
+    ax_tas.text(70, 2, "Subalkaline", fontsize=14, color="black", alpha=1)
+    ax_tas.text(50, 11, "Alkaline", fontsize=14, color="black", alpha=1)
+    ax_tas.set_xlabel(r"$\mathrm{SiO_2}$ (wt%)")
+    ax_tas.set_ylabel(r"$\mathrm{Na_2O + K_2O}$ (wt%)")
+    ax_tas.set_ylim(0, 18)
+    ax_tas.set_xlim(40, 80)
+    ax_tas.grid(True, color="0.92", linewidth=0.5, zorder=0)
+    add_panel_label_yaxis_aligned(ax_tas, "(b)", bbox=False)
+    return fig, (ax_pt, ax_tas)
 
 def _valid_xy__nb00_c18(df, x_col, y_col):
     x = pd.to_numeric(df[x_col], errors="coerce")
@@ -499,8 +788,39 @@ TAS_YLIM__nb00_c24 = (0, 18.5)
 TP_XLIM__nb00_c24  = (650, 1750)
 TP_YLIM__nb00_c24  = (-0.5, 42)
 MARKERS_CYCLE__nb00_c24 = ['o', 's', '^', 'D', 'v', 'P', 'X', '*', '<', '>']
-COLOR_CYCLE__nb00_c24 = plt.cm.tab10.colors
-COLOR_CYCLE__nb00_c24 = COLOR_CYCLE__nb00_c24[0:8] + COLOR_CYCLE__nb00_c24[9:10]
+
+COLOR_CYCLE__nb00_c24 = (
+    # Group 1: models 1–3
+    "#D55E00",  # red-orange
+    "#E6B800",  # yellow / gold
+    "#0072B2",  # blue
+
+    # Group 2: models 4–6
+    "#CC3311",  # stronger red
+    "#999900",  # dark yellow / olive-gold
+    "#0099CC",  # cyan-blue
+
+    # Group 3: models 7–8
+    "#8B0000",  # dark red
+    "#004C7A",  # dark blue
+)
+TAS_FIELD_LABELS__nb00_c24 = [
+    ("Picro-\nbasalt", 42.0, 1.2),
+    ("Basalt", 48.0, 2.4),
+    ("Basaltic\nandesite", 54.2, 3.3),
+    ("Andesite", 60.5, 4.1),
+    ("Dacite", 67.2, 4.9),
+    ("Rhyolite", 75.0, 8.0),
+    ("Trachy-\nbasalt", 48.2, 5.0),
+    ("Basaltic\ntrachy-\nandesite", 53.0, 6.2),
+    ("Trachy-\nandesite", 58.5, 7.2),
+    ("Trachyte /\ntrachydacite", 66.5, 10.0),
+    ("Tephrite /\nbasanite", 43.2, 6.4),
+    ("Phono-\ntephrite", 47.6, 9.0),
+    ("Tephri-\nphonolite", 52.4, 11.4),
+    ("Phonolite", 58.2, 14.0),
+    ("Foidite", 39.8, 12.5),
+]
 
 def safe_numeric__nb00_c24(arr):
     return np.asarray(arr, dtype=float)
@@ -511,17 +831,58 @@ def get_n_liq__nb00_c24(model):
 
 def build_global_color_map__nb00_c24(model_names, color_cycle):
     if len(model_names) > len(color_cycle):
-        raise ValueError("tab10 has only 10 colors; too many models.")
+        raise ValueError("The configured colorblind-friendly palette is too short for the model list.")
     return {name: color_cycle[i] for i, name in enumerate(model_names)}
 
-def make_group_style__nb00_c24(names, global_color_map):
+def make_group_style__nb00_c24(names, global_color_map, name2n=None):
+    min_n = None
+    if name2n:
+        valid_counts = [name2n.get(name, np.inf) for name in names]
+        valid_counts = [count for count in valid_counts if np.isfinite(count)]
+        min_n = min(valid_counts) if valid_counts else None
+
     style = {}
     for i, name in enumerate(names):
         style[name] = dict(
             color=global_color_map[name],
-            marker=MARKERS_CYCLE__nb00_c24[i % len(MARKERS_CYCLE__nb00_c24)]
+            marker=MARKERS_CYCLE__nb00_c24[i % len(MARKERS_CYCLE__nb00_c24)],
+            filled=not (min_n is not None and name2n is not None and name2n.get(name) == min_n),
         )
     return style
+
+def add_tas_field_labels__nb00_c24(ax, *, fontsize=8.6, color="0.18"):
+    """Add manually wrapped TAS field labels for compact manuscript panels."""
+    for label, x, y in TAS_FIELD_LABELS__nb00_c24:
+        ax.text(
+            x,
+            y,
+            label,
+            ha="center",
+            va="center",
+            fontsize=fontsize,
+            color=color,
+            linespacing=0.88,
+            zorder=2,
+            clip_on=True,
+        )
+
+def _scatter_model_xy__nb00_c24(ax, x, y, style, scatter_style):
+    plot_style = dict(scatter_style)
+    marker = style["marker"]
+    color = style["color"]
+    if style.get("filled", True):
+        ax.scatter(x, y, c=[color], marker=marker, **plot_style)
+    else:
+        line_width = max(float(plot_style.pop("linewidths", 0.0)), 1.1)
+        ax.scatter(
+            x,
+            y,
+            marker=marker,
+            facecolors="none",
+            edgecolors=color,
+            linewidths=line_width,
+            **plot_style,
+        )
 
 def plot_tas_group__nb00_c24(ax, model_names, name2model, name2style, scatter_style):
     template = None
@@ -540,8 +901,10 @@ def plot_tas_group__nb00_c24(ax, model_names, name2model, name2style, scatter_st
         axes=ax,
         color="none",
         plot_alkaline_boundary=True,
+        add_TAS_labels=False,
         linewidth=0.5,
     )
+    add_tas_field_labels__nb00_c24(ax)
 
     for n in model_names:
         X = getattr(name2model[n], 'X_liq_all', None)
@@ -554,12 +917,7 @@ def plot_tas_group__nb00_c24(ax, model_names, name2model, name2style, scatter_st
         m = np.isfinite(Si) & np.isfinite(Na) & np.isfinite(K)
 
         st = name2style[n]
-        ax.scatter(
-            Si[m], Na[m] + K[m],
-            c=[st["color"]],
-            marker=st["marker"],
-            **scatter_style
-        )
+        _scatter_model_xy__nb00_c24(ax, Si[m], Na[m] + K[m], st, scatter_style)
 
     ax.set_xlim(*TAS_XLIM__nb00_c24)
     ax.set_ylim(*TAS_YLIM__nb00_c24)
@@ -627,7 +985,7 @@ def plot_tp_scatter_hull__nb00_c24(ax, model_names, name2model, name2style, scat
         T, P = T[m], P[m]
 
         st = name2style[n]
-        ax.scatter(T, P, c=[st["color"]], marker=st["marker"], **scatter_style)
+        _scatter_model_xy__nb00_c24(ax, T, P, st, scatter_style)
 
         pts = np.unique(np.column_stack([T, P]), axis=0)
         if pts.shape[0] < 3:
@@ -637,8 +995,15 @@ def plot_tp_scatter_hull__nb00_c24(ax, model_names, name2model, name2style, scat
             hull = ConvexHull(pts)
             hp = pts[hull.vertices]
             hp = np.vstack([hp, hp[0]])
-            ax.plot(hp[:, 0], hp[:, 1],
-                    color=st["color"], lw=1.2, ls="--", alpha=0.9)
+            ax.plot(
+                hp[:, 0],
+                hp[:, 1],
+                color=st["color"],
+                lw=1.8,
+                ls="--",
+                alpha=0.95,
+                zorder=8,
+            )
         except QhullError:
             pass
 
@@ -649,8 +1014,8 @@ def plot_tp_binned_median_trend__nb00_c24(
     ax, model_names, name2model, name2style,
     dp, min_per_bin,
     *,
-    line_lw=1,
-    marker_size=7.5,
+    line_lw=1.8,
+    marker_size=12.5,
     marker_edge_w=1.0
 ):
     for n in model_names:
@@ -689,12 +1054,12 @@ def plot_tp_binned_median_trend__nb00_c24(
 
         ax.plot(
             T_median, P_pos,
-            color="k",
+            color="0.12",
             lw=line_lw,
             marker='h',
             markersize=marker_size,
             markerfacecolor=c,          # model color fill
-            markeredgecolor='black',    # black outline
+            markeredgecolor='0.08',     # dark outline
             markeredgewidth=marker_edge_w,
             zorder=10
         )
@@ -706,9 +1071,10 @@ def add_legend_fixed_ul__nb00_c24(ax, names, name2style, name2n):
         handles.append(
             Line2D([0], [0],
                    marker=st["marker"], linestyle='None',
-                   markerfacecolor=st["color"],
-                   markeredgecolor='none',
-                   markersize=7)
+                   markerfacecolor=st["color"] if st.get("filled", True) else "none",
+                   markeredgecolor='none' if st.get("filled", True) else st["color"],
+                   markeredgewidth=1.3 if not st.get("filled", True) else 0,
+                   markersize=8.5)
         )
         labels.append(f"{n} (N={name2n[n]})")
 
@@ -718,7 +1084,7 @@ def add_legend_fixed_ul__nb00_c24(ax, names, name2style, name2n):
         bbox_to_anchor=(0.08, 0.98),
         bbox_transform=ax.transAxes,
         frameon=False,
-        fontsize=9,
+        fontsize=LEGEND_FONT_SIZE,
         handletextpad=0.6,
         borderaxespad=0.0,
         labelspacing=0.4
@@ -2424,6 +2790,29 @@ def _add_panel_label__nb03_c20(ax, label, *, x=-0.12, y=0.98, fontsize=14):
         clip_on=False,
     )
 
+def _calc_regression_fit__nb03_c20(x, y):
+    df = pd.DataFrame({"x": x, "y": y}).dropna()
+    if len(df) < 2:
+        return np.nan, np.nan, 0
+    slope, intercept = np.polyfit(df["x"], df["y"], 1)
+    return float(slope), float(intercept), int(len(df))
+
+def _calc_min_individual_rmse__nb03_c20(y_true, predicted_df, model_cols):
+    rmses = []
+    for col in model_cols:
+        if col not in predicted_df.columns:
+            continue
+        residual = pd.to_numeric(predicted_df[col], errors="coerce") - y_true
+        residual = residual.replace([np.inf, -np.inf], np.nan).dropna()
+        if len(residual):
+            rmses.append(float(np.sqrt(np.nanmean(residual.to_numpy(dtype=float) ** 2))))
+    return min(rmses) if rmses else np.nan
+
+def _format_rmse_value__nb03_c20(value, fmt):
+    if value is None or not np.isfinite(value):
+        return "NA"
+    return format(float(value), fmt)
+
 def plot_pressure_residual_panel__nb03_c20(
     P_real,
     predicted_P_df,
@@ -2439,9 +2828,16 @@ def plot_pressure_residual_panel__nb03_c20(
     marker_sets_master=None,
     title="Pressure Residuals Panel",
     y_lim=None,
-    # ✅ NEW
     add_workflow_rmse_text=True,
     rmse_text_kwargs=None,
+    workflow_rmse_override=None,
+    individual_rmse_override=None,
+    workflow_rmse_fmt=".2f",
+    individual_rmse_fmt=".2f",
+    individual_style="version_a",
+    add_workflow_regression=True,
+    workflow_regression_color="#b2182b",
+    workflow_regression_label="This-study fit",
 ):
     # ----------------------------
     # Filter samples
@@ -2459,10 +2855,9 @@ def plot_pressure_residual_panel__nb03_c20(
     wf_pred = predicted_[workflow_col]
     wf_residual = wf_pred - P_real_
 
-    # ✅ NEW: RMSE for workflow in this panel
-    # RMSE = sqrt(mean((wf_residual)^2)), computed on the filtered samples
+    # Compute workflow RMSE on the samples included in this panel.
     wf_rmse = float(np.sqrt(np.nanmean((wf_residual.values) ** 2)))
-    # avoid nan
+    # Drop NaNs before computing the diagnostic R2 value.
     df_ = pd.DataFrame({'P_real': P_real_.values, 'wf_pred': wf_pred.values})
     df_.dropna(inplace=True)
     r2 = r2_score(df_['P_real'], df_['wf_pred'])
@@ -2486,6 +2881,7 @@ def plot_pressure_residual_panel__nb03_c20(
         fig, ax = plt.subplots(1, 1, figsize=(6, 5), dpi=200)
 
     legend_handles, legend_labels = [], []
+    individual_handle_added = False
 
     # ----------------------------
     # Plot models
@@ -2496,6 +2892,24 @@ def plot_pressure_residual_panel__nb03_c20(
 
         marker = marker_sets.pop(0) if marker_sets else 'o'
         color = color_sets.pop(0) if color_sets else 'C0'
+
+        if individual_style == "gray_background":
+            sc = ax.scatter(
+                P_real_,
+                residual,
+                marker="o",
+                s=28,
+                facecolors="0.83",
+                edgecolors="0.70",
+                linewidths=0.35,
+                alpha=0.42,
+                zorder=1,
+            )
+            if not individual_handle_added:
+                legend_handles.append(sc)
+                legend_labels.append("Individual models")
+                individual_handle_added = True
+            continue
 
         if gray_worse_than_workflow:
             mask_worse = np.abs(residual) > np.abs(wf_residual)
@@ -2529,11 +2943,28 @@ def plot_pressure_residual_panel__nb03_c20(
     # ----------------------------
     sc_wf = ax.scatter(
         P_real_, wf_residual,
-        marker='*', s=150,
+        marker='*', s=170,
         color='red', edgecolor='black', zorder=3,
     )
     legend_handles.append(sc_wf)
-    legend_labels.append("AIMS4PT_cpx (this study)")
+    legend_labels.append("This study")
+
+    if add_workflow_regression:
+        wf_slope, wf_intercept, _ = _calc_regression_fit__nb03_c20(P_real_, wf_residual)
+        if np.isfinite(wf_slope):
+            x_line = np.array([P_min, P_max], dtype=float)
+            y_line = wf_slope * x_line + wf_intercept
+            line = ax.plot(
+                x_line,
+                y_line,
+                color=workflow_regression_color,
+                linewidth=2.4,
+                linestyle="-",
+                zorder=4,
+                label=workflow_regression_label,
+            )[0]
+            legend_handles.append(line)
+            legend_labels.append(workflow_regression_label)
 
     # ----------------------------
     # Decorations
@@ -2542,22 +2973,30 @@ def plot_pressure_residual_panel__nb03_c20(
     ax.set_xlim(P_min - 1, P_max + 1)
     if y_lim is not None:
         ax.set_ylim(*y_lim)
-    ax.set_xlabel("True P (kbar)")
-    ax.set_ylabel("ΔP (kbar)")
+    ax.set_xlabel(r"True $P$ (kbar)")
+    ax.set_ylabel(r"$\Delta P$ (kbar)")
     ax.set_title(title)
 
-    # ✅ NEW: RMSE text in the top-right
+    # Add compact RMSE annotation in the top-right.
     if add_workflow_rmse_text:
         if rmse_text_kwargs is None:
             rmse_text_kwargs = dict(
-                fontsize=12,
-                ha="center",
+                fontsize=14,
+                ha="left",
                 va="top",
                 bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor="none", alpha=0.6),
             )
+        this_rmse = wf_rmse if workflow_rmse_override is None else workflow_rmse_override
+        individual_rmse = (
+            _calc_min_individual_rmse__nb03_c20(P_real_, predicted_, model_cols)
+            if individual_rmse_override is None
+            else individual_rmse_override
+        )
         ax.text(
-            0.75, 0.90,
-            f"RMSE (AIMS4PT_cpx)\n= {wf_rmse:.2f} kbar",
+            0.58, 0.92,
+            "RMSE:\n"
+            f"This study = {_format_rmse_value__nb03_c20(this_rmse, workflow_rmse_fmt)} kbar\n"
+            f"Individual $\\geq$ {_format_rmse_value__nb03_c20(individual_rmse, individual_rmse_fmt)} kbar",
             transform=ax.transAxes,
             **rmse_text_kwargs,
         )
@@ -2590,6 +3029,29 @@ def _add_panel_label__nb03_c23(ax, label, *, x=-0.12, y=0.98, fontsize=14):
         clip_on=False,
     )
 
+def _calc_regression_fit__nb03_c23(x, y):
+    df = pd.DataFrame({"x": x, "y": y}).dropna()
+    if len(df) < 2:
+        return np.nan, np.nan, 0
+    slope, intercept = np.polyfit(df["x"], df["y"], 1)
+    return float(slope), float(intercept), int(len(df))
+
+def _calc_min_individual_rmse__nb03_c23(y_true, predicted_df, model_cols):
+    rmses = []
+    for col in model_cols:
+        if col not in predicted_df.columns:
+            continue
+        residual = pd.to_numeric(predicted_df[col], errors="coerce") - y_true
+        residual = residual.replace([np.inf, -np.inf], np.nan).dropna()
+        if len(residual):
+            rmses.append(float(np.sqrt(np.nanmean(residual.to_numpy(dtype=float) ** 2))))
+    return min(rmses) if rmses else np.nan
+
+def _format_rmse_value__nb03_c23(value, fmt):
+    if value is None or not np.isfinite(value):
+        return "NA"
+    return format(float(value), fmt)
+
 def plot_temperature_residual_panel__nb03_c23(
     T_real,
     predicted_T_df,
@@ -2608,6 +3070,14 @@ def plot_temperature_residual_panel__nb03_c23(
     limit_y=False,
     add_workflow_rmse_text=True,
     rmse_text_kwargs=None,
+    workflow_rmse_override=None,
+    individual_rmse_override=None,
+    workflow_rmse_fmt=".0f",
+    individual_rmse_fmt=".2f",
+    individual_style="version_a",
+    add_workflow_regression=True,
+    workflow_regression_color="#b2182b",
+    workflow_regression_label="This-study fit",
 ):
     import numpy as np
     import matplotlib.pyplot as plt
@@ -2628,10 +3098,9 @@ def plot_temperature_residual_panel__nb03_c23(
     wf_pred = predicted_[workflow_col]
     wf_residual = wf_pred - T_real_
 
-        # ✅ NEW: RMSE for workflow in this panel
-    # RMSE = sqrt(mean((wf_residual)^2)), computed on the filtered samples
+    # Compute workflow RMSE on the samples included in this panel.
     wf_rmse = float(np.sqrt(np.nanmean((wf_residual.values) ** 2)))
-    # avoid nan
+    # Drop NaNs before computing the diagnostic R2 value.
     df_ = pd.DataFrame({'T_real': T_real_.values, 'wf_pred': wf_pred.values})
     df_.dropna(inplace=True)
     r2 = r2_score(df_['T_real'], df_['wf_pred'])
@@ -2655,6 +3124,7 @@ def plot_temperature_residual_panel__nb03_c23(
         fig, ax = plt.subplots(1, 1, figsize=(6, 5), dpi=200)
 
     legend_handles, legend_labels = [], []
+    individual_handle_added = False
 
     # ----------------------------
     # Plot models
@@ -2665,6 +3135,24 @@ def plot_temperature_residual_panel__nb03_c23(
 
         marker = marker_sets.pop(0) if marker_sets else 'o'
         color = color_sets.pop(0) if color_sets else 'C0'
+
+        if individual_style == "gray_background":
+            sc = ax.scatter(
+                T_real_,
+                residual,
+                marker="o",
+                s=28,
+                facecolors="0.83",
+                edgecolors="0.70",
+                linewidths=0.35,
+                alpha=0.42,
+                zorder=1,
+            )
+            if not individual_handle_added:
+                legend_handles.append(sc)
+                legend_labels.append("Individual models")
+                individual_handle_added = True
+            continue
 
         if gray_worse_than_workflow:
             mask_worse = abs(residual) > abs(wf_residual)
@@ -2698,11 +3186,28 @@ def plot_temperature_residual_panel__nb03_c23(
     # ----------------------------
     sc_wf = ax.scatter(
         T_real_, wf_residual,
-        marker='*', s=150,
+        marker='*', s=170,
         color='red', edgecolor='black', zorder=3,
     )
     legend_handles.append(sc_wf)
-    legend_labels.append("AIMS4PT_cpx (this study)")
+    legend_labels.append("This study")
+
+    if add_workflow_regression:
+        wf_slope, wf_intercept, _ = _calc_regression_fit__nb03_c23(T_real_, wf_residual)
+        if np.isfinite(wf_slope):
+            x_line = np.array([T_min, T_max], dtype=float)
+            y_line = wf_slope * x_line + wf_intercept
+            line = ax.plot(
+                x_line,
+                y_line,
+                color=workflow_regression_color,
+                linewidth=2.4,
+                linestyle="-",
+                zorder=4,
+                label=workflow_regression_label,
+            )[0]
+            legend_handles.append(line)
+            legend_labels.append(workflow_regression_label)
 
     # ----------------------------
     # Decorations
@@ -2712,23 +3217,31 @@ def plot_temperature_residual_panel__nb03_c23(
     if y_lim is not None:
         ax.set_ylim(*y_lim)
     elif limit_y:
-        ax.set_ylim(top=400,)
-    ax.set_xlabel("True T (°C)")
-    ax.set_ylabel("ΔT (°C)")
+        ax.set_ylim(-200, 350)
+    ax.set_xlabel(r"True $T$ ($^\circ$C)")
+    ax.set_ylabel(r"$\Delta T$ ($^\circ$C)")
     ax.set_title(title)
 
-        # ✅ NEW: RMSE text in the top-right
+    # Add compact RMSE annotation in the top-right.
     if add_workflow_rmse_text:
         if rmse_text_kwargs is None:
             rmse_text_kwargs = dict(
-                fontsize=12,
-                ha="center",
+                fontsize=14,
+                ha="left",
                 va="top",
                 bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor="none", alpha=0),
             )
+        this_rmse = wf_rmse if workflow_rmse_override is None else workflow_rmse_override
+        individual_rmse = (
+            _calc_min_individual_rmse__nb03_c23(T_real_, predicted_, model_cols)
+            if individual_rmse_override is None
+            else individual_rmse_override
+        )
         ax.text(
-            0.75, 0.90,
-            f"RMSE (AIMS4PT_cpx)\n= {wf_rmse:.0f} °C",
+            0.57, 0.92,
+            "RMSE:\n"
+            f"This study = {_format_rmse_value__nb03_c23(this_rmse, workflow_rmse_fmt)} $^\\circ$C\n"
+            f"Individual $\\geq$ {_format_rmse_value__nb03_c23(individual_rmse, individual_rmse_fmt)} $^\\circ$C",
             transform=ax.transAxes,
             **rmse_text_kwargs,
         )
