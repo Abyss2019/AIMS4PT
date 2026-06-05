@@ -272,7 +272,19 @@ def wrap_text(
     Notes:
       - This is a simple fixed-width wrapper, NOT dictionary-based hyphenation.
       - Existing hyphens are preserved and are not duplicated.
+      - Explicit line breaks are preserved, and each line is wrapped separately.
     """
+    if "\n" in text or "\r" in text:
+        return "\n".join(
+            wrap_text(
+                line,
+                max_width=max_width,
+                allow_word_break=allow_word_break,
+                hyphen_char=hyphen_char,
+            )
+            for line in text.splitlines()
+        )
+
     # --- original cleanup ---
     text = re.sub(r"(\()", r" \1", text)
     text = re.sub(r"\s+", " ", text).strip()

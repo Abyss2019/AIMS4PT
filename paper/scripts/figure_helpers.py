@@ -27,12 +27,6 @@ from paper.scripts.constants_illustration import (
     get_model_abbreviation,
 )
 
-try:
-    import shap
-except ImportError:  # pragma: no cover
-    shap = None
-
-
 def save_figure_pdf_png(fig, output_dir, stem, *, dpi=300, bbox_inches="tight", **savefig_kwargs):
     """Save a figure as both PDF and PNG using a shared file stem."""
     output_dir = Path(output_dir)
@@ -76,14 +70,16 @@ def apply_figure_font_sizes(
         ax.title.set_size(title_size)
 
     for legend in fig.legends:
+        legend_size = getattr(legend, "_aims4pt_font_size", legend_font_size)
         for text in legend.get_texts():
-            text.set_fontsize(legend_font_size)
+            text.set_fontsize(legend_size)
     for ax in fig.axes:
         legend = ax.get_legend()
         if legend is None:
             continue
+        legend_size = getattr(legend, "_aims4pt_font_size", legend_font_size)
         for text in legend.get_texts():
-            text.set_fontsize(legend_font_size)
+            text.set_fontsize(legend_size)
 
 
 def add_panel_label_yaxis_aligned(
@@ -472,6 +468,489 @@ def plot_two_panels_example__nb03_c03(
     return fig, axes
 
 
+COL_REFERENCE__nb03_c15 = "0.82"
+COL_ID__nb03_c15 = "#2ca25f"
+COL_OOD__nb03_c15 = "#de2d26"
+COL_BOUNDARY__nb03_c15 = "0.55"
+symbol_reference__nb03_c15 = "s"
+symbol_new__nb03_c15 = "o"
+S_REFERENCE__nb03_c15 = 10
+S_NEW__nb03_c15 = 125
+ALPHA_REFERENCE__nb03_c15 = 0.55
+ALPHA_NEW__nb03_c15 = 1.0
+EDGE_NEW__nb03_c15 = "black"
+LW_NEW__nb03_c15 = 1.0
+FILL_FACE__nb03_c15 = "0.88"
+FILL_ALPHA__nb03_c15 = 1.0
+FILL_EDGE__nb03_c15 = "0.65"
+FILL_LW__nb03_c15 = 0.8
+AXIS_LABEL_SIZE__nb03_c15 = 17
+TICK_LABEL_SIZE__nb03_c15 = 15
+TITLE_SIZE__nb03_c15 = 17
+LEGEND_FONT_SIZE__nb03_c15 = 15
+LEGEND_MARKER_SIZE__nb03_c15 = 12
+REFERENCE_MODEL_PRIORITY__nb03_c15 = [
+    ("Wang et al., 2021", "Calibration dataset"),
+]
+TP_T_COL__nb03_c15 = "T_C"
+TP_P_COL__nb03_c15 = "P_kbar"
+DEFAULT_OOD_DEMO_SAMPLE_IDS__nb03_c15 = [159, 166, 279, 280, 225, 226, 227, 223]
+
+
+def _numeric_cols__nb03_c15(df: pd.DataFrame):
+    return [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+
+
+def _base_row__nb03_c15(df: pd.DataFrame, cols, how="median") -> pd.DataFrame:
+    sub = df[cols]
+    s = sub.mean(numeric_only=True) if how == "mean" else sub.median(numeric_only=True)
+    return s.reindex(cols).to_frame().T
+
+
+def _is_ood_bool__nb03_c15(model, X_cpx, X_liq=None):
+    """Return a boolean OOD mask from the model detector."""
+    out = model.OOD_detector.is_ood(X_cpx, X_liq)
+    if isinstance(out, (bool, np.bool_)):
+        return np.array([bool(out)])
+    return np.asarray(out).astype(bool)
+
+
+def _extract_zero_contour_paths__nb03_c15(xx, yy, Z, level=0.0):
+    """Extract contour paths for a scalar decision boundary."""
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    cs = ax.contour(xx, yy, Z, levels=[level])
+    plt.close(fig)
+    if len(cs.collections) == 0:
+        return []
+    return [(p.vertices[:, 0].copy(), p.vertices[:, 1].copy()) for p in cs.collections[0].get_paths()]
+
+
+def _eval_detector_on_slice__nb03_c15(
+    detector,
+    *,
+    base_cpx_row: pd.DataFrame | None,
+    base_liq_row: pd.DataFrame | None,
+    x_feat: str,
+    y_feat: str,
+    xx: np.ndarray,
+    yy: np.ndarray,
+):
+    """Repeat median rows over a 2-D feature grid and evaluate detector scores."""
+    n = xx.size
+    Xc = pd.concat([base_cpx_row] * n, ignore_index=True) if base_cpx_row is not None else None
+    Xl = pd.concat([base_liq_row] * n, ignore_index=True) if base_liq_row is not None else None
+
+    for X in (Xc, Xl):
+        if X is None:
+            continue
+        if x_feat in X.columns:
+            X[x_feat] = xx.ravel()
+        if y_feat in X.columns:
+            X[y_feat] = yy.ravel()
+
+    if Xl is None:
+        score = detector.score(Xc, X_liq=None).ravel()
+    else:
+        score = detector.score(Xc, Xl).ravel()
+    return score.reshape(xx.shape)
+
+
+def _match_ood_demo_reference_model__nb03_c15(model_dict, family_name, preferred_suffix="(cpx_only)"):
+    preferred = [name for name in model_dict if family_name in name and preferred_suffix in name]
+    if preferred:
+        return model_dict[preferred[0]]
+    matches = [name for name in model_dict if family_name in name]
+    return model_dict[matches[0]] if matches else None
+
+
+def resolve_ood_demo_reference_models__nb03_c15(P_model_dict, T_model_dict):
+    """Resolve one representative reference family for fig. 3 TAS and P-T panels."""
+    for family_name, label in REFERENCE_MODEL_PRIORITY__nb03_c15:
+        P_model = _match_ood_demo_reference_model__nb03_c15(P_model_dict, family_name)
+        T_model = _match_ood_demo_reference_model__nb03_c15(T_model_dict, family_name)
+        if P_model is not None and T_model is not None:
+            return P_model, T_model, label
+    raise KeyError(
+        "Could not resolve a unified reference model from the current pipeline. "
+        f"Available P models: {sorted(P_model_dict.keys())}; "
+        f"Available T models: {sorted(T_model_dict.keys())}"
+    )
+
+
+def build_ood_demo_reference_pt_dataset__nb03_c15(P_model, T_model, tp_t_col=TP_T_COL__nb03_c15, tp_p_col=TP_P_COL__nb03_c15):
+    """Build paired reference P-T data from training datasets."""
+    reference_pt = getattr(P_model, "X_cpx_training", None)
+    if reference_pt is None or len(reference_pt) == 0:
+        raise ValueError("Reference P model has no X_cpx_training calibration dataset.")
+    reference_pt = reference_pt.copy()
+
+    reference_t = getattr(T_model, "X_cpx_training", None)
+    if reference_t is None or len(reference_t) == 0:
+        raise ValueError("Reference T model has no X_cpx_training calibration dataset.")
+    reference_t = reference_t.copy()
+
+    if "Sample_ID" in reference_pt.columns and "Sample_ID" in reference_t.columns:
+        reference_t_lookup = (
+            reference_t[["Sample_ID", tp_t_col]]
+            .dropna(subset=[tp_t_col])
+            .drop_duplicates(subset="Sample_ID")
+        )
+        reference_pt = reference_pt.drop(columns=[tp_t_col], errors="ignore").merge(
+            reference_t_lookup,
+            on="Sample_ID",
+            how="left",
+        )
+    elif tp_t_col not in reference_pt.columns and tp_t_col in reference_t.columns and len(reference_pt) == len(reference_t):
+        reference_pt[tp_t_col] = reference_t[tp_t_col].to_numpy()
+
+    missing_cols = [col for col in (tp_p_col, tp_t_col) if col not in reference_pt.columns]
+    if missing_cols:
+        raise KeyError(f"Reference P-T dataset is missing required columns: {missing_cols}")
+    return reference_pt
+
+
+def get_ood_demo_reference_liq_dataset__nb03_c15(P_model, T_model):
+    """Return the liquid training dataset for the resolved reference model."""
+    reference_liq = getattr(P_model, "X_liq_training", None)
+    if reference_liq is None:
+        reference_liq = getattr(T_model, "X_liq_all", None)
+    if reference_liq is None or len(reference_liq) == 0:
+        raise ValueError("Unified reference model has no liquid calibration dataset for the TAS panel.")
+    return reference_liq.copy()
+
+
+def panel_a_TAS__nb03_c15(ax, X_liq_reference, reference_label, reference_model, X_liq_new=None):
+    """Draw fig. 3 TAS-field OOD panel."""
+    plot_glass_TAS_diagram(
+        X_liq_reference,
+        axes=ax,
+        color=COL_REFERENCE__nb03_c15,
+        marker=symbol_reference__nb03_c15,
+        label=reference_label,
+        fill=True,
+        facecolor=FILL_FACE__nb03_c15,
+        edgecolor=FILL_EDGE__nb03_c15,
+        linewidth=FILL_LW__nb03_c15,
+        s=S_REFERENCE__nb03_c15,
+        alpha=ALPHA_REFERENCE__nb03_c15,
+    )
+
+    if X_liq_new is not None and len(X_liq_new) > 0:
+        liq_df = normalize_column_names(X_liq_new).copy()
+        tas_types = liq_df.apply(get_TAS_rock_types, axis=1)
+        tas_ok = np.array([rock_type_check(rt, reference_model.rock_types, report=False) for rt in tas_types])
+        liq_df["Na2O + K2O"] = liq_df["Na2O"] + liq_df["K2O"]
+        for mask, color, label, zorder in [
+            (tas_ok, COL_ID__nb03_c15, "New samples (in-distribution)", 5),
+            (~tas_ok, COL_OOD__nb03_c15, "New samples (OOD)", 6),
+        ]:
+            ax.scatter(
+                liq_df["SiO2"].loc[mask],
+                liq_df["Na2O + K2O"].loc[mask],
+                c=color,
+                s=S_NEW__nb03_c15,
+                alpha=ALPHA_NEW__nb03_c15,
+                edgecolor=EDGE_NEW__nb03_c15,
+                lw=LW_NEW__nb03_c15,
+                label=label,
+                zorder=zorder,
+                marker=symbol_new__nb03_c15,
+            )
+
+    ax.set_title("TAS-field OOD", fontsize=TITLE_SIZE__nb03_c15, pad=10)
+    ax.set_xlabel("SiO$_2$ (wt.%)", fontsize=AXIS_LABEL_SIZE__nb03_c15)
+    ax.set_ylabel("Na$_2$O + K$_2$O (wt.%)", fontsize=AXIS_LABEL_SIZE__nb03_c15)
+    ax.tick_params(axis="both", labelsize=TICK_LABEL_SIZE__nb03_c15)
+    return ax
+
+
+def panel_b_PT__nb03_c15(ax, X_reference, X_cpx_new, X_liq_new, P_model, T_model):
+    """Draw fig. 3 predicted P-T OOD panel."""
+    if TP_P_COL__nb03_c15 not in X_reference.columns or TP_T_COL__nb03_c15 not in X_reference.columns:
+        raise KeyError("X_reference must contain P_kbar and T_C columns for panel_b_PT__nb03_c15.")
+
+    P_ref = X_reference[TP_P_COL__nb03_c15].to_numpy(float)
+    T_ref = X_reference[TP_T_COL__nb03_c15].to_numpy(float)
+    ref_mask = np.isfinite(P_ref) & np.isfinite(T_ref)
+    P_ref = P_ref[ref_mask]
+    T_ref = T_ref[ref_mask]
+    ax.scatter(
+        P_ref,
+        T_ref,
+        c=COL_REFERENCE__nb03_c15,
+        s=S_REFERENCE__nb03_c15,
+        alpha=ALPHA_REFERENCE__nb03_c15,
+        edgecolor="none",
+        marker=symbol_reference__nb03_c15,
+        zorder=1,
+    )
+
+    Pmin, Pmax = np.nanmin(P_ref), np.nanmax(P_ref)
+    Tmin, Tmax = np.nanmin(T_ref), np.nanmax(T_ref)
+    ax.add_patch(
+        Rectangle(
+            (Pmin, Tmin),
+            Pmax - Pmin,
+            Tmax - Tmin,
+            facecolor=FILL_FACE__nb03_c15,
+            edgecolor=FILL_EDGE__nb03_c15,
+            lw=FILL_LW__nb03_c15,
+            alpha=FILL_ALPHA__nb03_c15,
+            zorder=0,
+        )
+    )
+
+    P_pred = np.asarray(P_model.predict(X_cpx_new, X_liq_new)).ravel()
+    T_pred = np.asarray(T_model.predict(X_cpx_new, X_liq_new)).ravel()
+    in_range = (P_pred >= Pmin) & (P_pred <= Pmax) & (T_pred >= Tmin) & (T_pred <= Tmax)
+    ax.scatter(
+        P_pred,
+        T_pred,
+        c=np.where(in_range, COL_ID__nb03_c15, COL_OOD__nb03_c15),
+        s=S_NEW__nb03_c15,
+        alpha=ALPHA_NEW__nb03_c15,
+        edgecolor=EDGE_NEW__nb03_c15,
+        lw=LW_NEW__nb03_c15,
+        zorder=5,
+        marker=symbol_new__nb03_c15,
+    )
+    ax.set_xlabel("P (kbar)", fontsize=AXIS_LABEL_SIZE__nb03_c15)
+    ax.set_ylabel(r"T ($^\circ$C)", fontsize=AXIS_LABEL_SIZE__nb03_c15)
+    ax.set_title("Predicted P-T OOD", fontsize=TITLE_SIZE__nb03_c15, pad=10)
+    ax.tick_params(axis="both", labelsize=TICK_LABEL_SIZE__nb03_c15)
+    ax.set_xlim(0, 17.5)
+    ax.set_ylim(800, 1600)
+    return ax
+
+
+def _panel_model_ood_slice__nb03_c15(
+    ax,
+    model,
+    *,
+    x_axis: str,
+    y_axis: str,
+    base_how="median",
+    n_grid=260,
+    X_cpx_new=None,
+    X_liq_new=None,
+):
+    """Draw a hard-rule OOD detector slice in the selected feature plane."""
+    detector = model.OOD_detector
+    Xc_train = model.X_cpx_training
+    Xl_train = model.X_liq_training
+
+    def which_phase(col: str) -> str:
+        if col.endswith("_cpx"):
+            return "cpx"
+        if col.endswith("_liq"):
+            return "liq"
+        raise ValueError(f"Column '{col}' must end with '_cpx' or '_liq'.")
+
+    column_aliases = {
+        "FeOt_cpx": ("FeO_cpx",),
+        "FeO_cpx": ("FeOt_cpx",),
+        "FeOt_liq": ("FeO_liq",),
+        "FeO_liq": ("FeOt_liq",),
+    }
+
+    def resolve_existing_column(df: pd.DataFrame, col: str, *, role: str) -> str:
+        for candidate in (col, *column_aliases.get(col, ())):
+            if candidate in df.columns:
+                return candidate
+        raise KeyError(f"Could not find column '{col}' in {role}.")
+
+    x_phase = which_phase(x_axis)
+    y_phase = which_phase(y_axis)
+    x_train_df = Xc_train if x_phase == "cpx" else Xl_train
+    y_train_df = Xc_train if y_phase == "cpx" else Xl_train
+    if x_train_df is None or y_train_df is None:
+        raise AttributeError("Model is missing training data for the requested OOD slice.")
+
+    x_train_axis = resolve_existing_column(x_train_df, x_axis, role=f"{x_phase} training data")
+    y_train_axis = resolve_existing_column(y_train_df, y_axis, role=f"{y_phase} training data")
+    if x_phase != y_phase:
+        idx = x_train_df.index.intersection(y_train_df.index)
+        if len(idx) == 0:
+            raise ValueError("No overlapping indices between cpx and liq training data for mixed-phase plot.")
+        x_tr = x_train_df.loc[idx, x_train_axis].to_numpy(float)
+        y_tr = y_train_df.loc[idx, y_train_axis].to_numpy(float)
+    else:
+        x_tr = x_train_df[x_train_axis].to_numpy(float)
+        y_tr = y_train_df[y_train_axis].to_numpy(float)
+
+    x_min, x_max = np.nanpercentile(x_tr, [0, 100])
+    y_min, y_max = np.nanpercentile(y_tr, [0, 100])
+    xx, yy = np.meshgrid(np.linspace(x_min, x_max, n_grid), np.linspace(y_min, y_max, n_grid))
+    base_cpx = _base_row__nb03_c15(Xc_train, _numeric_cols__nb03_c15(Xc_train), how=base_how) if Xc_train is not None else None
+    base_liq = _base_row__nb03_c15(Xl_train, _numeric_cols__nb03_c15(Xl_train), how=base_how) if Xl_train is not None else None
+
+    Z = _eval_detector_on_slice__nb03_c15(
+        detector,
+        base_cpx_row=base_cpx,
+        base_liq_row=base_liq,
+        x_feat=x_train_axis,
+        y_feat=y_train_axis,
+        xx=xx,
+        yy=yy,
+    )
+    for xp, yp in _extract_zero_contour_paths__nb03_c15(xx, yy, Z, level=0.0):
+        ax.plot(xp, yp, color=COL_BOUNDARY__nb03_c15, lw=1.2, alpha=0.7, zorder=3)
+
+    ax.scatter(
+        x_tr,
+        y_tr,
+        s=S_REFERENCE__nb03_c15,
+        alpha=ALPHA_REFERENCE__nb03_c15,
+        c=COL_REFERENCE__nb03_c15,
+        edgecolor="none",
+        zorder=1,
+        marker=symbol_reference__nb03_c15,
+    )
+
+    x_new_df = X_cpx_new if x_phase == "cpx" else X_liq_new
+    y_new_df = X_cpx_new if y_phase == "cpx" else X_liq_new
+    if x_new_df is not None and y_new_df is not None:
+        x_new_axis = resolve_existing_column(x_new_df, x_axis, role=f"{x_phase} new data")
+        y_new_axis = resolve_existing_column(y_new_df, y_axis, role=f"{y_phase} new data")
+        ood_mask = _is_ood_bool__nb03_c15(model, X_cpx=X_cpx_new, X_liq=X_liq_new)
+        ax.scatter(
+            x_new_df[x_new_axis].to_numpy(float),
+            y_new_df[y_new_axis].to_numpy(float),
+            c=np.where(ood_mask, COL_OOD__nb03_c15, COL_ID__nb03_c15),
+            s=S_NEW__nb03_c15,
+            alpha=ALPHA_NEW__nb03_c15,
+            edgecolor=EDGE_NEW__nb03_c15,
+            lw=LW_NEW__nb03_c15,
+            zorder=5,
+            marker=symbol_new__nb03_c15,
+        )
+
+    ax.set_xlabel(x_axis, fontsize=AXIS_LABEL_SIZE__nb03_c15)
+    ax.set_ylabel(y_axis, fontsize=AXIS_LABEL_SIZE__nb03_c15)
+    ax.tick_params(axis="both", labelsize=TICK_LABEL_SIZE__nb03_c15)
+    return ax
+
+
+def panel_c_P_model_ood__nb03_c15(ax, model, *, x_axis="FeO_cpx", y_axis="CaO_cpx", X_cpx_new=None, X_liq_new=None):
+    """Draw fig. 3 SHAP-weighted feature-space OOD panel."""
+    _panel_model_ood_slice__nb03_c15(
+        ax,
+        model,
+        x_axis=x_axis,
+        y_axis=y_axis,
+        X_cpx_new=X_cpx_new,
+        X_liq_new=X_liq_new,
+    )
+    ax.set_title("SHAP-weighted feature-space OOD", fontsize=TITLE_SIZE__nb03_c15, pad=10)
+    return ax
+
+
+def plot_ood_demo_figure__nb03_c15(
+    P_model_dict,
+    T_model_dict,
+    cpx_unseen,
+    liq_unseen,
+    *,
+    sample_ids=DEFAULT_OOD_DEMO_SAMPLE_IDS__nb03_c15,
+    figsize=(21, 6),
+    dpi=200,
+):
+    """Build the three-panel fig. 3 OOD demonstration."""
+    P_model, T_model, reference_label = resolve_ood_demo_reference_models__nb03_c15(P_model_dict, T_model_dict)
+    reference_liq_df = get_ood_demo_reference_liq_dataset__nb03_c15(P_model, T_model)
+    reference_pt_df = build_ood_demo_reference_pt_dataset__nb03_c15(P_model, T_model)
+    sample_cpx_input = cpx_unseen.loc[list(sample_ids)].reset_index(drop=True)
+    sample_liq_input = liq_unseen.loc[list(sample_ids)].reset_index(drop=True)
+
+    fig, axes = plt.subplots(1, 3, figsize=figsize, dpi=dpi)
+    panel_a_TAS__nb03_c15(
+        axes[0],
+        reference_liq_df,
+        reference_label,
+        P_model,
+        X_liq_new=sample_liq_input,
+    )
+    panel_b_PT__nb03_c15(
+        axes[1],
+        reference_pt_df,
+        sample_cpx_input,
+        sample_liq_input,
+        P_model,
+        T_model,
+    )
+    panel_c_P_model_ood__nb03_c15(
+        axes[2],
+        P_model,
+        x_axis="FeO_cpx",
+        y_axis="CaO_cpx",
+        X_cpx_new=sample_cpx_input,
+        X_liq_new=sample_liq_input,
+    )
+
+    for ax, panel_label in zip(axes, ["(a)", "(b)", "(c)"]):
+        ax.text(
+            -0.10,
+            1.10,
+            panel_label,
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=17,
+            fontweight="bold",
+            clip_on=False,
+        )
+
+    handles = [
+        Line2D(
+            [0],
+            [0],
+            marker=symbol_reference__nb03_c15,
+            color="w",
+            label=reference_label,
+            markerfacecolor=COL_REFERENCE__nb03_c15,
+            markersize=LEGEND_MARKER_SIZE__nb03_c15,
+            markeredgecolor="none",
+            alpha=0.8,
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker=symbol_new__nb03_c15,
+            color="w",
+            label="New samples (in-distribution)",
+            markerfacecolor=COL_ID__nb03_c15,
+            markersize=LEGEND_MARKER_SIZE__nb03_c15,
+            markeredgecolor=EDGE_NEW__nb03_c15,
+            markeredgewidth=LW_NEW__nb03_c15,
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker=symbol_new__nb03_c15,
+            color="w",
+            label="New samples (OOD)",
+            markerfacecolor=COL_OOD__nb03_c15,
+            markersize=LEGEND_MARKER_SIZE__nb03_c15,
+            markeredgecolor=EDGE_NEW__nb03_c15,
+            markeredgewidth=LW_NEW__nb03_c15,
+        ),
+    ]
+    fig.legend(
+        handles=handles,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.97),
+        ncol=3,
+        frameon=True,
+        fontsize=LEGEND_FONT_SIZE__nb03_c15,
+        handletextpad=0.6,
+        borderaxespad=0.0,
+        labelspacing=0.4,
+    )
+    plt.subplots_adjust(top=0.82, wspace=0.28)
+    return fig, axes
+
+
 # Helpers extracted from 00_independent_dataset.ipynb cell 16.
 import matplotlib.pyplot as plt
 import numpy as np
@@ -537,6 +1016,7 @@ def plot_independent_pt_distribution__nb00_c18(
     reference_label="Agreda-Lopez et al. (2024)",
     figsize=None,
     dpi=250,
+    tas_series_label_fontsize=18,
 ):
     """Plot the independent-dataset P-T panel and, when available, the main TAS panel."""
     include_tas_panel = agreda_reference_liq is not None and liq_unseen is not None
@@ -728,8 +1208,8 @@ def plot_independent_pt_distribution__nb00_c18(
         + 39.0
     )
     ax_tas.plot(alkaline_boundary, ys, color="black", linestyle="--", linewidth=3.0, alpha=0.8)
-    ax_tas.text(70, 2, "Subalkaline", fontsize=14, color="black", alpha=1)
-    ax_tas.text(50, 11, "Alkaline", fontsize=14, color="black", alpha=1)
+    ax_tas.text(70, 2, "Subalkaline", fontsize=tas_series_label_fontsize, color="black", alpha=1)
+    ax_tas.text(50, 11, "Alkaline", fontsize=tas_series_label_fontsize, color="black", alpha=1)
     ax_tas.set_xlabel(r"$\mathrm{SiO_2}$ (wt%)")
     ax_tas.set_ylabel(r"$\mathrm{Na_2O + K_2O}$ (wt%)")
     ax_tas.set_ylim(0, 18)
@@ -788,39 +1268,107 @@ TAS_YLIM__nb00_c24 = (0, 18.5)
 TP_XLIM__nb00_c24  = (650, 1750)
 TP_YLIM__nb00_c24  = (-0.5, 42)
 MARKERS_CYCLE__nb00_c24 = ['o', 's', '^', 'D', 'v', 'P', 'X', '*', '<', '>']
+LEGEND_FONT_SIZE__nb00_c24 = 13
+LEGEND_MARKER_SIZE__nb00_c24 = 8.5
 
-COLOR_CYCLE__nb00_c24 = (
-    # Group 1: models 1–3
-    "#D55E00",  # red-orange
-    "#E6B800",  # yellow / gold
-    "#0072B2",  # blue
+MODEL_STYLE__nb00_c24 = {
+    # Group 1: large (N >= 1500)
+    "Chi23": {
+        "color": "#FF4D4D",
+        "plot_order": 1,
+        "group": "large",
+        "group_label": "Large group (N >= 1500)",
+    },
+    "Jor22": {
+        "color": "#2EB2FF",
+        "plot_order": 2,
+        "group": "large",
+        "group_label": "Large group (N >= 1500)",
+    },
+    "Agl24": {
+        "color": "#FFAE00",
+        "plot_order": 3,
+        "group": "large",
+        "group_label": "Large group (N >= 1500)",
+    },
+    # Group 2: medium (500 <= N < 1500)
+    "Pet20": {
+        "color": "#DC0000",
+        "plot_order": 4,
+        "group": "medium",
+        "group_label": "Medium group (500 <= N < 1500)",
+    },
+    "Hig21": {
+        "color": "#0062FF",
+        "plot_order": 5,
+        "group": "medium",
+        "group_label": "Medium group (500 <= N < 1500)",
+    },
+    "Wan21": {
+        "color": "#FF9100",
+        "plot_order": 6,
+        "group": "medium",
+        "group_label": "Medium group (500 <= N < 1500)",
+    },
+    # Group 3: small (0 < N < 500)
+    "NP17": {
+        "color": "#8B0000",
+        "plot_order": 7,
+        "group": "small",
+        "group_label": "Small group (0 < N < 500)",
+    },
+    "BT19": {
+        "color": "#004C7A",
+        "plot_order": 8,
+        "group": "small",
+        "group_label": "Small group (0 < N < 500)",
+    },
+}
+MODEL_STYLE_LOOKUP__nb00_c24 = {
+    key.casefold(): key for key in MODEL_STYLE__nb00_c24
+}
 
-    # Group 2: models 4–6
-    "#CC3311",  # stronger red
-    "#999900",  # dark yellow / olive-gold
-    "#0099CC",  # cyan-blue
-
-    # Group 3: models 7–8
-    "#8B0000",  # dark red
-    "#004C7A",  # dark blue
+COLOR_CYCLE__nb00_c24 = tuple(
+    style["color"]
+    for _, style in sorted(
+        MODEL_STYLE__nb00_c24.items(),
+        key=lambda item: item[1]["plot_order"],
+    )
 )
 TAS_FIELD_LABELS__nb00_c24 = [
-    ("Picro-\nbasalt", 42.0, 1.2),
-    ("Basalt", 48.0, 2.4),
-    ("Basaltic\nandesite", 54.2, 3.3),
-    ("Andesite", 60.5, 4.1),
-    ("Dacite", 67.2, 4.9),
-    ("Rhyolite", 75.0, 8.0),
-    ("Trachy-\nbasalt", 48.2, 5.0),
-    ("Basaltic\ntrachy-\nandesite", 53.0, 6.2),
-    ("Trachy-\nandesite", 58.5, 7.2),
-    ("Trachyte /\ntrachydacite", 66.5, 10.0),
-    ("Tephrite /\nbasanite", 43.2, 6.4),
-    ("Phono-\ntephrite", 47.6, 9.0),
-    ("Tephri-\nphonolite", 52.4, 11.4),
-    ("Phonolite", 58.2, 14.0),
-    ("Foidite", 39.8, 12.5),
+    ("Picro-\nbasalt", 43.00, 1.50),
+    ("Basalt", 48.50, 2.50),
+    ("Basaltic\nandesite", 54.57, 2.73),
+    ("Andesite", 60.09, 3.23),
+    ("Dacite", 68.49, 3.29),
+    ("Rhyolite", 75.82, 6.54),
+    ("Trachy-\nbasalt", 48.80, 5.77),
+    ("Basaltic\ntrachy-\nandesite", 53.00, 6.92),
+    ("Trachy-\nandesite", 57.75, 8.52),
+    ("Trachyte /\ntrachydacite", 64.18, 11.18),
+    ("Tephrite /\nbasanite", 44.21, 6.15),
+    ("Phono-\ntephrite", 48.96, 9.38),
+    ("Tephri-\nphonolite", 52.91, 11.64),
+    ("Phonolite", 57.07, 15.23),
+    ("Foidite", 42.68, 11.20),
 ]
+TAS_FIELD_POLYGONS__nb00_c24 = {
+    "B": ((45, 0), (45, 5), (52, 5), (52, 0)),
+    "F": ((35, 9), (37, 14), (52.5, 18), (52.5, 14), (48.4, 11.5), (45, 9.4), (41, 7), (41, 3), (37, 3)),
+    "O1": ((52, 0), (52, 5), (57, 5.9), (57, 0)),
+    "O2": ((57, 0), (57, 5.9), (63, 7), (63, 0)),
+    "O3": ((63, 0), (63, 7), (69, 8), (77.3, 0)),
+    "Pc": ((41, 3), (45, 3), (45, 2), (45, 0), (41, 0)),
+    "Ph": ((52.5, 14), (52.5, 18), (57, 18), (63, 16.2), (61, 13.5), (57.6, 11.7)),
+    "R": ((69, 8), (69, 13), (85.9, 6.8), (87.5, 4.7), (77.3, 0)),
+    "S1": ((45, 5), (49.4, 7.3), (52, 5)),
+    "S2": ((49.4, 7.3), (53, 9.3), (57, 5.9), (52, 5)),
+    "S3": ((53, 9.3), (57.6, 11.7), (61, 8.6), (63, 7), (57, 5.9)),
+    "T1T2": ((57.6, 11.7), (61, 13.5), (63, 16.2), (69, 13), (69, 8), (63, 7), (61, 8.6)),
+    "U1": ((41, 3), (41, 7), (45, 9.4), (49.4, 7.3), (45, 5), (45, 3)),
+    "U2": ((45, 9.4), (48.4, 11.5), (53, 9.3), (49.4, 7.3)),
+    "U3": ((48.4, 11.5), (52.5, 14), (57.6, 11.7), (53, 9.3)),
+}
 
 def safe_numeric__nb00_c24(arr):
     return np.asarray(arr, dtype=float)
@@ -829,10 +1377,43 @@ def get_n_liq__nb00_c24(model):
     X = getattr(model, 'X_liq_all', None)
     return 0 if X is None else len(X)
 
+def _resolve_model_style_key__nb00_c24(model_name):
+    """Resolve full model names or abbreviations to the configured fig. 1 style key."""
+    candidates = [str(model_name)]
+    for target in ("P", "T"):
+        candidates.append(get_model_abbreviation(str(model_name), target))
+
+    for candidate in candidates:
+        style_key = MODEL_STYLE_LOOKUP__nb00_c24.get(str(candidate).casefold())
+        if style_key is not None:
+            return style_key
+    return None
+
+def _get_model_style__nb00_c24(model_name):
+    style_key = _resolve_model_style_key__nb00_c24(model_name)
+    if style_key is None:
+        return None
+    return MODEL_STYLE__nb00_c24[style_key]
+
+def order_model_names_for_fig1__nb00_c24(model_names):
+    """Order fig. 1 models by the configured plot order."""
+    def sort_key(indexed_name):
+        index, name = indexed_name
+        style = _get_model_style__nb00_c24(name)
+        if style is None:
+            return (1, index)
+        return (0, style["plot_order"], index)
+
+    return [name for _, name in sorted(enumerate(model_names), key=sort_key)]
+
 def build_global_color_map__nb00_c24(model_names, color_cycle):
     if len(model_names) > len(color_cycle):
         raise ValueError("The configured colorblind-friendly palette is too short for the model list.")
-    return {name: color_cycle[i] for i, name in enumerate(model_names)}
+    color_map = {}
+    for i, name in enumerate(model_names):
+        style = _get_model_style__nb00_c24(name)
+        color_map[name] = style["color"] if style is not None else color_cycle[i]
+    return color_map
 
 def make_group_style__nb00_c24(names, global_color_map, name2n=None):
     min_n = None
@@ -850,7 +1431,56 @@ def make_group_style__nb00_c24(names, global_color_map, name2n=None):
         )
     return style
 
-def add_tas_field_labels__nb00_c24(ax, *, fontsize=8.6, color="0.18"):
+def _canonical_tas_segment__nb00_c24(p0, p1):
+    """Return an order-independent segment key for shared TAS boundaries."""
+    return tuple(sorted((tuple(round(value, 4) for value in p0), tuple(round(value, 4) for value in p1))))
+
+def _draw_tas_field_boundaries__nb00_c24(ax, *, color="black", linewidth=0.8, zorder=50):
+    """Draw TAS field boundaries directly from LeMaitreCombined polygon vertices."""
+    seen_segments = set()
+    boundary_lines = []
+    for poly in TAS_FIELD_POLYGONS__nb00_c24.values():
+        points = list(poly)
+        for p0, p1 in zip(points, points[1:] + points[:1]):
+            key = _canonical_tas_segment__nb00_c24(p0, p1)
+            if key in seen_segments:
+                continue
+            seen_segments.add(key)
+            line = ax.plot(
+                (p0[0], p1[0]),
+                (p0[1], p1[1]),
+                color=color,
+                linewidth=linewidth,
+                alpha=1.0,
+                zorder=zorder,
+            )[0]
+            boundary_lines.append(line)
+    return boundary_lines
+
+def _draw_tas_alkaline_boundary__nb00_c24(ax, *, color="black", linewidth=2.0, zorder=50):
+    """Draw the alkaline/subalkaline boundary used by plot_glass_TAS_diagram."""
+    ys = np.linspace(TAS_YLIM__nb00_c24[0], TAS_YLIM__nb00_c24[1], 100)
+    xs = (
+        -3.3539e-4 * ys**6
+        + 1.2030e-2 * ys**5
+        - 1.5188e-1 * ys**4
+        + 8.6096e-1 * ys**3
+        - 2.1111 * ys**2
+        + 3.9492 * ys
+        + 39.0
+    )
+    return ax.plot(
+        xs,
+        ys,
+        color=color,
+        linestyle="--",
+        linewidth=linewidth,
+        alpha=1.0,
+        zorder=zorder,
+        label="Alkaline/Subalkaline boundary",
+    )[0]
+
+def add_tas_field_labels__nb00_c24(ax, *, fontsize=8.6, color="black", alpha=1.0, fontweight="bold", zorder=35):
     """Add manually wrapped TAS field labels for compact manuscript panels."""
     for label, x, y in TAS_FIELD_LABELS__nb00_c24:
         ax.text(
@@ -860,11 +1490,23 @@ def add_tas_field_labels__nb00_c24(ax, *, fontsize=8.6, color="0.18"):
             ha="center",
             va="center",
             fontsize=fontsize,
+            fontweight=fontweight,
             color=color,
+            alpha=alpha,
             linespacing=0.88,
-            zorder=2,
+            zorder=zorder,
             clip_on=True,
         )
+
+def _style_tas_boundary_artists__nb00_c24(lines, collections, *, zorder=50, linewidth=0.8):
+    """Raise TAS field boundaries above calibration points."""
+    for line in lines:
+        line.set_zorder(zorder)
+        line.set_linewidth(max(line.get_linewidth(), linewidth))
+        line.set_alpha(1.0)
+    for collection in collections:
+        collection.set_zorder(zorder)
+        collection.set_alpha(1.0)
 
 def _scatter_model_xy__nb00_c24(ax, x, y, style, scatter_style):
     plot_style = dict(scatter_style)
@@ -885,26 +1527,12 @@ def _scatter_model_xy__nb00_c24(ax, x, y, style, scatter_style):
         )
 
 def plot_tas_group__nb00_c24(ax, model_names, name2model, name2style, scatter_style):
-    template = None
-    for n in model_names:
-        X = getattr(name2model[n], 'X_liq_all', None)
-        if X is not None:
-            template = X.iloc[0:0].copy()
-            break
-
-    if template is None:
+    has_liq_data = any(getattr(name2model[n], 'X_liq_all', None) is not None for n in model_names)
+    if not has_liq_data:
         return
 
-    plot_glass_TAS_diagram(
-        X_liq=template,
-        model="LeMaitreCombined",
-        axes=ax,
-        color="none",
-        plot_alkaline_boundary=True,
-        add_TAS_labels=False,
-        linewidth=0.5,
-    )
-    add_tas_field_labels__nb00_c24(ax)
+    boundary_lines = _draw_tas_field_boundaries__nb00_c24(ax)
+    boundary_collections = []
 
     for n in model_names:
         X = getattr(name2model[n], 'X_liq_all', None)
@@ -919,6 +1547,10 @@ def plot_tas_group__nb00_c24(ax, model_names, name2model, name2style, scatter_st
         st = name2style[n]
         _scatter_model_xy__nb00_c24(ax, Si[m], Na[m] + K[m], st, scatter_style)
 
+    add_tas_field_labels__nb00_c24(ax)
+    _style_tas_boundary_artists__nb00_c24(boundary_lines, boundary_collections)
+    ax.set_xlabel(r"$\mathrm{SiO_2}$ (wt%)")
+    ax.set_ylabel(r"$\mathrm{Na_2O + K_2O}$ (wt%)")
     ax.set_xlim(*TAS_XLIM__nb00_c24)
     ax.set_ylim(*TAS_YLIM__nb00_c24)
 
@@ -973,7 +1605,17 @@ def add_panel_labels__nb00_c24(
             zorder=1000
         )
 
-def plot_tp_scatter_hull__nb00_c24(ax, model_names, name2model, name2style, scatter_style):
+def plot_tp_scatter_hull__nb00_c24(
+    ax,
+    model_names,
+    name2model,
+    name2style,
+    scatter_style,
+    *,
+    hull_lw=2.3,
+    hull_alpha=1.0,
+    hull_zorder=30,
+):
     for n in model_names:
         X = getattr(name2model[n], 'X_cpx_all', None)
         if X is None:
@@ -999,10 +1641,10 @@ def plot_tp_scatter_hull__nb00_c24(ax, model_names, name2model, name2style, scat
                 hp[:, 0],
                 hp[:, 1],
                 color=st["color"],
-                lw=1.8,
+                lw=hull_lw,
                 ls="--",
-                alpha=0.95,
-                zorder=8,
+                alpha=hull_alpha,
+                zorder=hull_zorder,
             )
         except QhullError:
             pass
@@ -1073,22 +1715,24 @@ def add_legend_fixed_ul__nb00_c24(ax, names, name2style, name2n):
                    marker=st["marker"], linestyle='None',
                    markerfacecolor=st["color"] if st.get("filled", True) else "none",
                    markeredgecolor='none' if st.get("filled", True) else st["color"],
-                   markeredgewidth=1.3 if not st.get("filled", True) else 0,
-                   markersize=8.5)
+                    markeredgewidth=1.1 if not st.get("filled", True) else 0,
+                    markersize=LEGEND_MARKER_SIZE__nb00_c24)
         )
         labels.append(f"{n} (N={name2n[n]})")
 
-    ax.legend(
+    legend = ax.legend(
         handles, labels,
         loc="upper left",
-        bbox_to_anchor=(0.08, 0.98),
+        bbox_to_anchor=(0.07, 0.98),
         bbox_transform=ax.transAxes,
         frameon=False,
-        fontsize=LEGEND_FONT_SIZE,
-        handletextpad=0.6,
+        fontsize=LEGEND_FONT_SIZE__nb00_c24,
+        handlelength=1.0,
+        handletextpad=0.3,
         borderaxespad=0.0,
-        labelspacing=0.4
+        labelspacing=0.25
     )
+    legend._aims4pt_font_size = LEGEND_FONT_SIZE__nb00_c24
 
 
 
@@ -2836,8 +3480,13 @@ def plot_pressure_residual_panel__nb03_c20(
     individual_rmse_fmt=".2f",
     individual_style="version_a",
     add_workflow_regression=True,
-    workflow_regression_color="#b2182b",
+    workflow_regression_color="#980012",
     workflow_regression_label="This-study fit",
+    workflow_regression_linestyle="--",
+    show_workflow_regression_in_legend=False,
+    rmse_text_xy=(0.47, 0.94),
+    individual_better_edge="#0071DC",
+    individual_worse_edge="0.65",
 ):
     # ----------------------------
     # Filter samples
@@ -2894,19 +3543,43 @@ def plot_pressure_residual_panel__nb03_c20(
         color = color_sets.pop(0) if color_sets else 'C0'
 
         if individual_style == "gray_background":
-            sc = ax.scatter(
-                P_real_,
-                residual,
+            mask_better = np.abs(residual) <= np.abs(wf_residual)
+            mask_worse = ~mask_better
+            ax.scatter(
+                P_real_[mask_worse],
+                residual[mask_worse],
                 marker="o",
-                s=28,
-                facecolors="0.83",
-                edgecolors="0.70",
-                linewidths=0.35,
-                alpha=0.42,
+                s=50,
+                facecolors="none",
+                edgecolors=individual_worse_edge,
+                linewidths=1.0,
+                alpha=1.0,
                 zorder=1,
             )
+            ax.scatter(
+                P_real_[mask_better],
+                residual[mask_better],
+                marker="o",
+                s=50,
+                facecolors="none",
+                edgecolors=individual_better_edge,
+                linewidths=1.2,
+                alpha=1.0,
+                zorder=2,
+            )
             if not individual_handle_added:
-                legend_handles.append(sc)
+                legend_handles.append(
+                    Line2D(
+                        [0],
+                        [0],
+                        marker="o",
+                        linestyle="None",
+                        markerfacecolor="none",
+                        markeredgecolor=individual_better_edge,
+                        markeredgewidth=1.1,
+                        markersize=7.5,
+                    )
+                )
                 legend_labels.append("Individual models")
                 individual_handle_added = True
             continue
@@ -2959,12 +3632,13 @@ def plot_pressure_residual_panel__nb03_c20(
                 y_line,
                 color=workflow_regression_color,
                 linewidth=2.4,
-                linestyle="-",
+                linestyle=workflow_regression_linestyle,
                 zorder=4,
                 label=workflow_regression_label,
             )[0]
-            legend_handles.append(line)
-            legend_labels.append(workflow_regression_label)
+            if show_workflow_regression_in_legend:
+                legend_handles.append(line)
+                legend_labels.append(workflow_regression_label)
 
     # ----------------------------
     # Decorations
@@ -2993,7 +3667,7 @@ def plot_pressure_residual_panel__nb03_c20(
             else individual_rmse_override
         )
         ax.text(
-            0.58, 0.92,
+            *rmse_text_xy,
             "RMSE:\n"
             f"This study = {_format_rmse_value__nb03_c20(this_rmse, workflow_rmse_fmt)} kbar\n"
             f"Individual $\\geq$ {_format_rmse_value__nb03_c20(individual_rmse, individual_rmse_fmt)} kbar",
@@ -3076,8 +3750,13 @@ def plot_temperature_residual_panel__nb03_c23(
     individual_rmse_fmt=".2f",
     individual_style="version_a",
     add_workflow_regression=True,
-    workflow_regression_color="#b2182b",
+    workflow_regression_color="#980012",
     workflow_regression_label="This-study fit",
+    workflow_regression_linestyle="--",
+    show_workflow_regression_in_legend=False,
+    rmse_text_xy=(0.47, 0.94),
+    individual_better_edge="#0071DC",
+    individual_worse_edge="0.65",
 ):
     import numpy as np
     import matplotlib.pyplot as plt
@@ -3137,19 +3816,43 @@ def plot_temperature_residual_panel__nb03_c23(
         color = color_sets.pop(0) if color_sets else 'C0'
 
         if individual_style == "gray_background":
-            sc = ax.scatter(
-                T_real_,
-                residual,
+            mask_better = np.abs(residual) <= np.abs(wf_residual)
+            mask_worse = ~mask_better
+            ax.scatter(
+                T_real_[mask_worse],
+                residual[mask_worse],
                 marker="o",
-                s=28,
-                facecolors="0.83",
-                edgecolors="0.70",
-                linewidths=0.35,
-                alpha=0.42,
+                s=50,
+                facecolors="none",
+                edgecolors=individual_worse_edge,
+                linewidths=1.0,
+                alpha=1.0,
                 zorder=1,
             )
+            ax.scatter(
+                T_real_[mask_better],
+                residual[mask_better],
+                marker="o",
+                s=50,
+                facecolors="none",
+                edgecolors=individual_better_edge,
+                linewidths=1.2,
+                alpha=1.0,
+                zorder=2,
+            )
             if not individual_handle_added:
-                legend_handles.append(sc)
+                legend_handles.append(
+                    Line2D(
+                        [0],
+                        [0],
+                        marker="o",
+                        linestyle="None",
+                        markerfacecolor="none",
+                        markeredgecolor=individual_better_edge,
+                        markeredgewidth=1.1,
+                        markersize=7.5,
+                    )
+                )
                 legend_labels.append("Individual models")
                 individual_handle_added = True
             continue
@@ -3202,12 +3905,13 @@ def plot_temperature_residual_panel__nb03_c23(
                 y_line,
                 color=workflow_regression_color,
                 linewidth=2.4,
-                linestyle="-",
+                linestyle=workflow_regression_linestyle,
                 zorder=4,
                 label=workflow_regression_label,
             )[0]
-            legend_handles.append(line)
-            legend_labels.append(workflow_regression_label)
+            if show_workflow_regression_in_legend:
+                legend_handles.append(line)
+                legend_labels.append(workflow_regression_label)
 
     # ----------------------------
     # Decorations
@@ -3238,7 +3942,7 @@ def plot_temperature_residual_panel__nb03_c23(
             else individual_rmse_override
         )
         ax.text(
-            0.57, 0.92,
+            *rmse_text_xy,
             "RMSE:\n"
             f"This study = {_format_rmse_value__nb03_c23(this_rmse, workflow_rmse_fmt)} $^\\circ$C\n"
             f"Individual $\\geq$ {_format_rmse_value__nb03_c23(individual_rmse, individual_rmse_fmt)} $^\\circ$C",

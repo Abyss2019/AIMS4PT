@@ -39,10 +39,10 @@ MANUSCRIPT_PANEL_LABEL_SIZE = 20
 MANUSCRIPT_ANNOTATION_SIZE = 15
 MANUSCRIPT_RESERVOIR_LABEL_SIZE = 17
 MANUSCRIPT_THIS_STUDY_AXIS_LABEL_SIZE = 21
-MANUSCRIPT_THIS_STUDY_Y_AXIS_LABEL_SIZE = 22
+MANUSCRIPT_THIS_STUDY_Y_AXIS_LABEL_SIZE = 24
 MANUSCRIPT_THIS_STUDY_TICK_LABEL_SIZE = 17
-MANUSCRIPT_THIS_STUDY_MODEL_TICK_LABEL_SIZE = 20
-MANUSCRIPT_THIS_STUDY_GROUP_LABEL_SIZE = 21
+MANUSCRIPT_THIS_STUDY_MODEL_TICK_LABEL_SIZE = 22
+MANUSCRIPT_THIS_STUDY_GROUP_LABEL_SIZE = 23
 MANUSCRIPT_THIS_STUDY_ANNOTATION_SIZE = 17
 MANUSCRIPT_THIS_STUDY_LEGEND_SIZE = 17
 
@@ -1373,7 +1373,7 @@ def _model_axis_label(model_name: str, kind: Optional[str] = None, *, use_model_
     if label == model_name:
         return _short_model_name(model_name)
     if label.startswith("Pu08_"):
-        return "Put08\n" + label.split("_", 1)[1]
+        return "Pu08\n_" + label.split("_", 1)[1]
     return label
 
 
@@ -2450,17 +2450,6 @@ def _add_pressure_reservoir_bands(
         ha = "right"
         clip_on = True
 
-    def _format_reservoir_label(raw_label: str) -> str:
-        label = raw_label.strip()
-        for token in (" km ", "km "):
-            if token in label:
-                label = label.split(token, 1)[1].strip()
-                break
-        label = label.removeprefix("<").removeprefix(">").strip()
-        label = label.replace("upper-crustal", "upper crustal")
-        label = label.replace("lower-crustal", "lower crustal")
-        return label
-
     for band in reservoir_bands:
         min_depth = band.get("min_depth_km", band.get("min km"))
         max_depth = band.get("max_depth_km", band.get("max km"))
@@ -2477,7 +2466,7 @@ def _add_pressure_reservoir_bands(
             ax.text(
                 x_text,
                 0.5 * (y0 + y1),
-                _format_reservoir_label(label),
+                label,
                 transform=transform,
                 ha=ha,
                 va="center",
@@ -2869,6 +2858,10 @@ def _plot_ranked_literature_panel(
     legend_fontsize: float = MANUSCRIPT_LEGEND_SIZE,
     annotation_fontsize: float = MANUSCRIPT_ANNOTATION_SIZE,
     reservoir_label_fontsize: float = MANUSCRIPT_RESERVOIR_LABEL_SIZE,
+    split_literature_legend: bool = False,
+    this_study_legend_bbox_to_anchor: tuple[float, float] = (0.005, 0.02),
+    literature_legend_bbox_to_anchor: tuple[float, float] = (0.58, 0.50),
+    reservoir_label_right_margin: float = 0.10,
 ) -> None:
     this_cols = _build_this_study_columns_for_comparison(
         kind,
@@ -2967,7 +2960,11 @@ def _plot_ranked_literature_panel(
                             clip_on=True,
                         )
 
-    x_right = len(methods_all) + (1.05 if reservoir_label_x is not None else 0.5)
+    x_right = (
+        reservoir_label_x + reservoir_label_right_margin
+        if reservoir_label_x is not None
+        else len(methods_all) + 0.5
+    )
     ax.set_xlim(0.5, x_right)
     ax.set_xticks(x_all)
     raw_xtick_labels = [method["label"] for method in methods_all]
@@ -3008,24 +3005,51 @@ def _plot_ranked_literature_panel(
     ax.xaxis.label.set_size(axis_label_fontsize)
 
     if add_literature_legend:
-        handles = [
+        this_study_handles = [
             Patch(facecolor="blue", edgecolor="k", alpha=1.0, label="2006 (this study)"),
             Patch(facecolor="red", edgecolor="k", alpha=1.0, label="2010 (this study)"),
+        ]
+        literature_handles = [
             Line2D([0], [0], color="purple", lw=4.0, label="2006&2010 (literature)"),
             Line2D([0], [0], color="blue", lw=4.0, label="2006 (literature)"),
             Line2D([0], [0], color="red", lw=4.0, label="2010 (literature)"),
         ]
-        ax.legend(
-            handles=handles,
-            loc="lower left",
-            bbox_to_anchor=(0.005, 0.02),
-            frameon=True,
-            ncol=3,
-            fontsize=legend_fontsize,
-            borderpad=0.35,
-            handlelength=1.6,
-            handletextpad=0.5,
-        )
+        if split_literature_legend:
+            this_legend = ax.legend(
+                handles=this_study_handles,
+                loc="lower left",
+                bbox_to_anchor=this_study_legend_bbox_to_anchor,
+                frameon=True,
+                ncol=1,
+                fontsize=legend_fontsize,
+                borderpad=0.35,
+                handlelength=1.6,
+                handletextpad=0.5,
+            )
+            ax.add_artist(this_legend)
+            ax.legend(
+                handles=literature_handles,
+                loc="center",
+                bbox_to_anchor=literature_legend_bbox_to_anchor,
+                frameon=True,
+                ncol=1,
+                fontsize=legend_fontsize,
+                borderpad=0.35,
+                handlelength=1.6,
+                handletextpad=0.5,
+            )
+        else:
+            ax.legend(
+                handles=[*this_study_handles, *literature_handles],
+                loc="lower left",
+                bbox_to_anchor=this_study_legend_bbox_to_anchor,
+                frameon=True,
+                ncol=3,
+                fontsize=legend_fontsize,
+                borderpad=0.35,
+                handlelength=1.6,
+                handletextpad=0.5,
+            )
 
 
 def _apply_this_study_axis_font_sizes(
@@ -3088,10 +3112,13 @@ def plot_ranked_thermobarometry_this_study(
     depth_max: float = 37,
     figsize: tuple[float, float] = (20.5, 16),
     constrained_layout: bool = True,
+    subplot_hspace: Optional[float] = 0.08,
     add_legend: bool = True,
     panel_labels: tuple[str, str] = ("(a)", "(b)"),
     save_path: Optional[str | Path] = None,
     use_model_abbreviations: bool = False,
+    tick_labelsize: float = MANUSCRIPT_THIS_STUDY_TICK_LABEL_SIZE,
+    model_tick_labelsize: float = MANUSCRIPT_THIS_STUDY_MODEL_TICK_LABEL_SIZE,
 ) -> tuple[plt.Figure, np.ndarray]:
     """
     Plot the notebook-style two-panel "this study" summary figure.
@@ -3113,6 +3140,8 @@ def plot_ranked_thermobarometry_this_study(
         model is highlighted. Otherwise the top two are highlighted.
     pressure_ylim, pressure_ticks : optional
         Optional fixed pressure-axis limits/ticks for the pressure panel.
+    subplot_hspace : float, optional
+        Vertical spacing between the pressure and temperature panels.
     save_path : path-like, optional
         If given, save the figure after creation.
 
@@ -3131,6 +3160,12 @@ def plot_ranked_thermobarometry_this_study(
     )
 
     fig, axes = plt.subplots(2, 1, figsize=figsize, constrained_layout=constrained_layout)
+    if subplot_hspace is not None:
+        if constrained_layout:
+            fig.set_constrained_layout_pads(hspace=subplot_hspace)
+        else:
+            fig.subplots_adjust(hspace=subplot_hspace)
+
     _plot_ranked_this_study_kind_panel(
         axes[0],
         "P",
@@ -3145,8 +3180,8 @@ def plot_ranked_thermobarometry_this_study(
         use_model_abbreviations=use_model_abbreviations,
         axis_label_fontsize=MANUSCRIPT_THIS_STUDY_AXIS_LABEL_SIZE,
         y_axis_label_fontsize=MANUSCRIPT_THIS_STUDY_Y_AXIS_LABEL_SIZE,
-        tick_labelsize=MANUSCRIPT_THIS_STUDY_TICK_LABEL_SIZE,
-        model_tick_labelsize=MANUSCRIPT_THIS_STUDY_MODEL_TICK_LABEL_SIZE,
+        tick_labelsize=tick_labelsize,
+        model_tick_labelsize=model_tick_labelsize,
         group_label_fontsize=MANUSCRIPT_THIS_STUDY_GROUP_LABEL_SIZE,
         annotation_fontsize=MANUSCRIPT_THIS_STUDY_ANNOTATION_SIZE,
     )
@@ -3160,8 +3195,8 @@ def plot_ranked_thermobarometry_this_study(
         use_model_abbreviations=use_model_abbreviations,
         axis_label_fontsize=MANUSCRIPT_THIS_STUDY_AXIS_LABEL_SIZE,
         y_axis_label_fontsize=MANUSCRIPT_THIS_STUDY_Y_AXIS_LABEL_SIZE,
-        tick_labelsize=MANUSCRIPT_THIS_STUDY_TICK_LABEL_SIZE,
-        model_tick_labelsize=MANUSCRIPT_THIS_STUDY_MODEL_TICK_LABEL_SIZE,
+        tick_labelsize=tick_labelsize,
+        model_tick_labelsize=model_tick_labelsize,
         group_label_fontsize=MANUSCRIPT_THIS_STUDY_GROUP_LABEL_SIZE,
         annotation_fontsize=MANUSCRIPT_THIS_STUDY_ANNOTATION_SIZE,
     )
@@ -3188,7 +3223,7 @@ def plot_ranked_thermobarometry_this_study(
         if len(panel_labels) > 1:
             _add_panel_label(axes[1], panel_labels[1], y=1.045)
 
-    _apply_this_study_axis_font_sizes(fig)
+    _apply_this_study_axis_font_sizes(fig, tick_labelsize=tick_labelsize, model_tick_labelsize=model_tick_labelsize)
 
     if save_path is not None:
         fig.savefig(Path(save_path), dpi=300)
@@ -3224,6 +3259,9 @@ def plot_ranked_thermobarometry_literature_comparison(
     use_model_abbreviations: bool = False,
     pressure_reservoir_bands: Optional[Sequence[Mapping[str, Any]]] = None,
     include_temperature: bool = True,
+    split_literature_legend: bool = False,
+    literature_legend_bbox_to_anchor: tuple[float, float] = (0.58, 0.50),
+    literature_reservoir_label_right_margin: float = 0.10,
 ) -> tuple[plt.Figure, np.ndarray]:
     """
     Plot the notebook-style two-panel "this study vs literature" comparison.
@@ -3278,6 +3316,9 @@ def plot_ranked_thermobarometry_literature_comparison(
         depth_max=depth_max,
         use_model_abbreviations=use_model_abbreviations,
         pressure_reservoir_bands=pressure_reservoir_bands,
+        split_literature_legend=split_literature_legend,
+        literature_legend_bbox_to_anchor=literature_legend_bbox_to_anchor,
+        reservoir_label_right_margin=literature_reservoir_label_right_margin,
     )
     if include_temperature and temperature_literature_df is not None:
         _plot_ranked_literature_panel(
@@ -3343,11 +3384,17 @@ def plot_ranked_thermobarometry_summary(
     literature_figsize: tuple[float, float] = (16.5, 16),
     this_study_save_path: Optional[str | Path] = None,
     literature_save_path: Optional[str | Path] = None,
+    this_study_subplot_hspace: Optional[float] = 0.08,
     show: bool = True,
     use_model_abbreviations: bool = False,
     pressure_reservoir_bands: Optional[Sequence[Mapping[str, Any]]] = None,
     literature_include_temperature: bool = True,
     literature_panel_labels: tuple[str, ...] = ("(a)", "(b)"),
+    this_study_tick_labelsize: float = MANUSCRIPT_THIS_STUDY_TICK_LABEL_SIZE,
+    this_study_model_tick_labelsize: float = MANUSCRIPT_THIS_STUDY_MODEL_TICK_LABEL_SIZE,
+    split_literature_legend: bool = False,
+    literature_legend_bbox_to_anchor: tuple[float, float] = (0.58, 0.50),
+    literature_reservoir_label_right_margin: float = 0.10,
 ) -> dict[str, tuple[plt.Figure, np.ndarray]]:
     """
     Convenience wrapper that reproduces both notebook summary figures.
@@ -3380,8 +3427,11 @@ def plot_ranked_thermobarometry_summary(
             depth_tick_step=depth_tick_step,
             depth_max=depth_max,
             figsize=this_study_figsize,
+            subplot_hspace=this_study_subplot_hspace,
             save_path=this_study_save_path,
             use_model_abbreviations=use_model_abbreviations,
+            tick_labelsize=this_study_tick_labelsize,
+            model_tick_labelsize=this_study_model_tick_labelsize,
         )
     }
 
@@ -3411,6 +3461,9 @@ def plot_ranked_thermobarometry_summary(
             pressure_reservoir_bands=pressure_reservoir_bands,
             include_temperature=literature_include_temperature,
             panel_labels=literature_panel_labels,
+            split_literature_legend=split_literature_legend,
+            literature_legend_bbox_to_anchor=literature_legend_bbox_to_anchor,
+            literature_reservoir_label_right_margin=literature_reservoir_label_right_margin,
         )
 
     if show:
