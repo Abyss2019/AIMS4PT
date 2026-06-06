@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from web.services.session_store import CalculationResult, SessionData
+from aims4pt_web.services.session_store import CalculationResult, SessionData
 
 
 def _format_cell(value: object, column: str) -> str:

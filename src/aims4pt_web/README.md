@@ -13,7 +13,7 @@ pip install -e ".[web]"
 Then run the server locally with:
 
 ```bash
-uvicorn web.main:app --host 127.0.0.1 --port 8003 --workers 1
+python -m aims4pt_web.launcher
 ```
 
 
@@ -23,6 +23,9 @@ Configuration is read from environment variables:
 - `SESSION_TTL_SECONDS`, default `7200`
 - `MAX_CONCURRENT_CALCULATIONS`, default `3`
 - `WEB_WORKERS_RECOMMENDED`, default `1`
+- `AIMS4PT_WEB_HOST`, default `127.0.0.1`
+- `AIMS4PT_WEB_PORT`, default `8003`; used as the first port to try
+- `AIMS4PT_WEB_STARTUP_TIMEOUT_SECONDS`, default `180`
 - `APP_ENV`, default `local`
 - `AIMS4PT_WEB_ENABLE_R_MODELS`, default `true`
 - `AIMS4PT_WEB_ENABLE_TENSORFLOW_MODELS`, default `true`
@@ -33,4 +36,3 @@ For small-memory servers, disable optional R-backed or TensorFlow-backed models 
 export AIMS4PT_WEB_ENABLE_R_MODELS=false
 export AIMS4PT_WEB_ENABLE_TENSORFLOW_MODELS=false
 ```
-

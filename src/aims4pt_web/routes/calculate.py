@@ -7,10 +7,10 @@ import logging
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 
-from web.routes.shared import base_context, templates
-from web.services.calculation_runner import run_calculation_async
-from web.services.result_views import build_session_context
-from web.services.session_store import get_session, store_result
+from aims4pt_web.routes.shared import base_context, templates
+from aims4pt_web.services.calculation_runner import run_calculation_async
+from aims4pt_web.services.result_views import build_session_context
+from aims4pt_web.services.session_store import get_session, store_result
 
 logger = logging.getLogger("web.calculate")
 router = APIRouter()

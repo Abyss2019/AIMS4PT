@@ -61,12 +61,13 @@ pip install ".[web]"
 Then run the server locally with:
 
 ```bash
-uvicorn web.main:app --host 127.0.0.1 --port 8003
+python -m aims4pt_web.launcher
 ```
 
-Open a browser and navigate to `http://127.0.0.1:8003 ` to access the interface.
+The launcher opens the interface in your default browser after the server is ready.
+It prefers `http://127.0.0.1:8003` and automatically tries later ports if needed.
 
-The port can be changed as needed.
+The preferred port can be changed as needed.
 
 ## Development and Reproduction
 

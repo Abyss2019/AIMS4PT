@@ -6,8 +6,8 @@ from pathlib import Path
 
 from fastapi.templating import Jinja2Templates
 
-from web.config import settings
-from web.services.calculation_runner import CALCULATION_SPECS
+from aims4pt_web.config import settings
+from aims4pt_web.services.calculation_runner import CALCULATION_SPECS
 
 templates = Jinja2Templates(
     directory=str(Path(__file__).resolve().parents[1] / "templates")

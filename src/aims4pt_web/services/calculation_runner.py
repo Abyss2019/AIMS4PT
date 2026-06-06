@@ -11,11 +11,11 @@ import time
 from dataclasses import dataclass
 
 from aims4pt.reporting.excel import build_report_payload
-from web.config import settings
-from web.services.input_validation import CPX_OXIDE_COLUMNS, LIQUID_OXIDE_COLUMNS
-from web.services.memory import log_memory
-from web.services.report_builder import write_payload_to_bytes
-from web.services.session_store import CalculationResult, SessionData
+from aims4pt_web.config import settings
+from aims4pt_web.services.input_validation import CPX_OXIDE_COLUMNS, LIQUID_OXIDE_COLUMNS
+from aims4pt_web.services.memory import log_memory
+from aims4pt_web.services.report_builder import write_payload_to_bytes
+from aims4pt_web.services.session_store import CalculationResult, SessionData
 
 logger = logging.getLogger("web.calculation")
 

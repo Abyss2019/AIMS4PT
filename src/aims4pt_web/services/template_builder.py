@@ -8,7 +8,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from web.services.input_validation import (
+from aims4pt_web.services.input_validation import (
     CPX_OXIDE_COLUMNS,
     EXPECTED_INPUT_COLUMNS,
     LIQUID_OXIDE_COLUMNS,

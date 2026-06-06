@@ -7,13 +7,13 @@ import logging
 from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import HTMLResponse
 
-from web.config import settings
-from web.routes.shared import base_context, templates
-from web.services.calculation_runner import initialize_model_pools_for_session
-from web.services.input_validation import validate_workbook_bytes
-from web.services.memory import log_memory
-from web.services.result_views import build_session_context
-from web.services.session_store import create_session, get_session
+from aims4pt_web.config import settings
+from aims4pt_web.routes.shared import base_context, templates
+from aims4pt_web.services.calculation_runner import initialize_model_pools_for_session
+from aims4pt_web.services.input_validation import validate_workbook_bytes
+from aims4pt_web.services.memory import log_memory
+from aims4pt_web.services.result_views import build_session_context
+from aims4pt_web.services.session_store import create_session, get_session
 
 logger = logging.getLogger("web.upload")
 router = APIRouter()

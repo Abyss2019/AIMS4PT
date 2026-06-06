@@ -10,8 +10,8 @@ from dataclasses import dataclass, field
 import pandas as pd
 from cachetools import TTLCache
 
-from web.config import settings
-from web.services.input_validation import ValidationResult
+from aims4pt_web.config import settings
+from aims4pt_web.services.input_validation import ValidationResult
 
 
 @dataclass

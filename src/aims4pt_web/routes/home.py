@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fastapi.responses import FileResponse, HTMLResponse
 
-from web.routes.shared import base_context, templates
+from aims4pt_web.routes.shared import base_context, templates
 
 router = APIRouter()
 TEMPLATE_PATH = Path(__file__).resolve().parents[1] / "static" / "input_template.xlsx"

@@ -9,10 +9,10 @@ from io import BytesIO
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
-from web.routes.shared import base_context, templates
-from web.services.calculation_runner import get_calculation_spec
-from web.services.memory import log_memory
-from web.services.session_store import get_session
+from aims4pt_web.routes.shared import base_context, templates
+from aims4pt_web.services.calculation_runner import get_calculation_spec
+from aims4pt_web.services.memory import log_memory
+from aims4pt_web.services.session_store import get_session
 
 logger = logging.getLogger("web.download")
 router = APIRouter()
