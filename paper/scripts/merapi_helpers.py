@@ -10,6 +10,8 @@ MERAPI_2006_COLOR = "#3995d6"
 MERAPI_2010_COLOR = "#f15454"
 INDEPENDENT_EXPERIMENTAL_COLOR = "0.62"
 MERAPI_YEAR_COLORS = {"2006": MERAPI_2006_COLOR, "2010": MERAPI_2010_COLOR}
+MERAPI_CIRCLE_SIZES = {"2006": 36, "2010": 46}
+MERAPI_LEGEND_CIRCLE_SIZES = {"2006": 7, "2010": 8}
 MOLAR_MASS_MGO = 40.3044
 MOLAR_MASS_FEO = 71.844
 
@@ -163,7 +165,7 @@ def _plot_cpx_points(ax, merapi_2006_df: pd.DataFrame, merapi_2010_df: pd.DataFr
             x,
             y,
             marker="o",
-            s=36,
+            s=MERAPI_CIRCLE_SIZES[year],
             facecolors=MERAPI_YEAR_COLORS[year],
             edgecolors="0.15",
             linewidths=0.45,
@@ -205,7 +207,7 @@ def _plot_liquid_groups(ax, liquid_df: pd.DataFrame, x_col: str, y_col: str):
                 x,
                 y,
                 marker=style["marker"],
-                s=style["size"],
+                s=MERAPI_CIRCLE_SIZES[year] if is_equilibrium_liquid else style["size"],
                 facecolors=color,
                 edgecolors="0.15" if is_equilibrium_liquid else "black",
                 linewidths=0.45 if is_equilibrium_liquid else 0.95,
@@ -231,14 +233,14 @@ def _add_top_merapi_legend(fig):
     from matplotlib.lines import Line2D
 
     handles = [
-        Line2D([0], [0], marker="o", color="none", markerfacecolor=MERAPI_2006_COLOR, markeredgecolor="0.15", markersize=7, label="2006 eruption"),
-        Line2D([0], [0], marker="o", color="none", markerfacecolor=MERAPI_2010_COLOR, markeredgecolor="0.15", markersize=7, label="2010 eruption"),
+        Line2D([0], [0], marker="o", color="none", markerfacecolor=MERAPI_2006_COLOR, markeredgecolor="0.15", markersize=MERAPI_LEGEND_CIRCLE_SIZES["2006"], label="2006 eruption"),
+        Line2D([0], [0], marker="o", color="none", markerfacecolor=MERAPI_2010_COLOR, markeredgecolor="0.15", markersize=MERAPI_LEGEND_CIRCLE_SIZES["2010"], label="2010 eruption"),
         Line2D([0], [0], marker="o", color="none", markerfacecolor=INDEPENDENT_EXPERIMENTAL_COLOR, markeredgecolor="none", markersize=7.5, label="Independent experimental dataset"),
     ]
     fig.legend(
         handles=handles,
         loc="upper center",
-        bbox_to_anchor=(0.5, 0.98),
+        bbox_to_anchor=(0.5, 0.93),
         ncol=3,
         frameon=True,
         fontsize=10,
@@ -682,4 +684,3 @@ def topk_neighbors_clr__nb04_c78(
         results[na_id] = out
 
     return results
-

@@ -2580,6 +2580,7 @@ def _build_this_study_columns_for_comparison(
                 df_pred,
                 kind_state["best_models"][year][phase_type],
             )
+            overall_data = _remove_boxplot_outliers(overall_data)
             models_to_plot = _pick_models_for_single_eruption(rank_pcts, threshold=selection_threshold)
             rank_pct_map = {model_name: pct for model_name, pct in rank_pcts}
 
@@ -2861,6 +2862,7 @@ def _plot_ranked_literature_panel(
     split_literature_legend: bool = False,
     this_study_legend_bbox_to_anchor: tuple[float, float] = (0.005, 0.02),
     literature_legend_bbox_to_anchor: tuple[float, float] = (0.58, 0.50),
+    reservoir_label_x_offset: float = 0.95,
     reservoir_label_right_margin: float = 0.10,
 ) -> None:
     this_cols = _build_this_study_columns_for_comparison(
@@ -2881,7 +2883,7 @@ def _plot_ranked_literature_panel(
     x_all = np.arange(1, len(methods_all) + 1)
     reservoir_label_x = None
     if kind == "P" and pressure_reservoir_bands:
-        reservoir_label_x = len(methods_all) + 0.95
+        reservoir_label_x = len(methods_all) + reservoir_label_x_offset
     _add_category_and_type_bands(
         ax,
         methods_all,
@@ -3261,6 +3263,8 @@ def plot_ranked_thermobarometry_literature_comparison(
     include_temperature: bool = True,
     split_literature_legend: bool = False,
     literature_legend_bbox_to_anchor: tuple[float, float] = (0.58, 0.50),
+    literature_model_tick_labelsize: float = MANUSCRIPT_MODEL_TICK_LABEL_SIZE,
+    literature_reservoir_label_x_offset: float = 0.95,
     literature_reservoir_label_right_margin: float = 0.10,
 ) -> tuple[plt.Figure, np.ndarray]:
     """
@@ -3315,9 +3319,11 @@ def plot_ranked_thermobarometry_literature_comparison(
         depth_tick_step=depth_tick_step,
         depth_max=depth_max,
         use_model_abbreviations=use_model_abbreviations,
+        model_tick_labelsize=literature_model_tick_labelsize,
         pressure_reservoir_bands=pressure_reservoir_bands,
         split_literature_legend=split_literature_legend,
         literature_legend_bbox_to_anchor=literature_legend_bbox_to_anchor,
+        reservoir_label_x_offset=literature_reservoir_label_x_offset,
         reservoir_label_right_margin=literature_reservoir_label_right_margin,
     )
     if include_temperature and temperature_literature_df is not None:
@@ -3332,6 +3338,7 @@ def plot_ranked_thermobarometry_literature_comparison(
             depth_tick_step=depth_tick_step,
             depth_max=depth_max,
             use_model_abbreviations=use_model_abbreviations,
+            model_tick_labelsize=literature_model_tick_labelsize,
         )
 
     if panel_labels:
@@ -3394,6 +3401,8 @@ def plot_ranked_thermobarometry_summary(
     this_study_model_tick_labelsize: float = MANUSCRIPT_THIS_STUDY_MODEL_TICK_LABEL_SIZE,
     split_literature_legend: bool = False,
     literature_legend_bbox_to_anchor: tuple[float, float] = (0.58, 0.50),
+    literature_model_tick_labelsize: Optional[float] = None,
+    literature_reservoir_label_x_offset: float = 0.95,
     literature_reservoir_label_right_margin: float = 0.10,
 ) -> dict[str, tuple[plt.Figure, np.ndarray]]:
     """
@@ -3411,6 +3420,12 @@ def plot_ranked_thermobarometry_summary(
         ``"literature_comparison"`` only when both literature tables are
         provided.
     """
+    literature_model_tick_labelsize = (
+        this_study_model_tick_labelsize
+        if literature_model_tick_labelsize is None
+        else literature_model_tick_labelsize
+    )
+
     figures = {
         "this_study": plot_ranked_thermobarometry_this_study(
             cpx_only_workflows,
@@ -3463,6 +3478,8 @@ def plot_ranked_thermobarometry_summary(
             panel_labels=literature_panel_labels,
             split_literature_legend=split_literature_legend,
             literature_legend_bbox_to_anchor=literature_legend_bbox_to_anchor,
+            literature_model_tick_labelsize=literature_model_tick_labelsize,
+            literature_reservoir_label_x_offset=literature_reservoir_label_x_offset,
             literature_reservoir_label_right_margin=literature_reservoir_label_right_margin,
         )
 

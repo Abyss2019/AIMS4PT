@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
-from matplotlib.patches import Rectangle
+from matplotlib.patches import Patch, Rectangle
 from pathlib import Path
 from scipy.spatial import ConvexHull, QhullError
 
@@ -468,15 +468,15 @@ def plot_two_panels_example__nb03_c03(
     return fig, axes
 
 
-COL_REFERENCE__nb03_c15 = "0.82"
+COL_REFERENCE__nb03_c15 = "0.55"
 COL_ID__nb03_c15 = "#2ca25f"
 COL_OOD__nb03_c15 = "#de2d26"
 COL_BOUNDARY__nb03_c15 = "0.55"
 symbol_reference__nb03_c15 = "s"
 symbol_new__nb03_c15 = "o"
-S_REFERENCE__nb03_c15 = 10
+S_REFERENCE__nb03_c15 = 18
 S_NEW__nb03_c15 = 125
-ALPHA_REFERENCE__nb03_c15 = 0.55
+ALPHA_REFERENCE__nb03_c15 = 1.0
 ALPHA_NEW__nb03_c15 = 1.0
 EDGE_NEW__nb03_c15 = "black"
 LW_NEW__nb03_c15 = 1.0
@@ -629,9 +629,8 @@ def panel_a_TAS__nb03_c15(ax, X_liq_reference, reference_label, reference_model,
         marker=symbol_reference__nb03_c15,
         label=reference_label,
         fill=True,
-        facecolor=FILL_FACE__nb03_c15,
-        edgecolor=FILL_EDGE__nb03_c15,
-        linewidth=FILL_LW__nb03_c15,
+        edgecolor="none",
+        linewidth=0,
         s=S_REFERENCE__nb03_c15,
         alpha=ALPHA_REFERENCE__nb03_c15,
     )
@@ -911,7 +910,7 @@ def plot_ood_demo_figure__nb03_c15(
             markerfacecolor=COL_REFERENCE__nb03_c15,
             markersize=LEGEND_MARKER_SIZE__nb03_c15,
             markeredgecolor="none",
-            alpha=0.8,
+            alpha=ALPHA_REFERENCE__nb03_c15,
         ),
         Line2D(
             [0],
@@ -1101,10 +1100,16 @@ def plot_independent_pt_distribution__nb00_c18(
     ax_pt.set_xlabel(r"Temperature ($^\circ$C)")
     ax_pt.set_ylabel("Pressure (kbar)")
     pt_handles, pt_labels = ax_pt.get_legend_handles_labels()
-    ref_handle = Line2D([0], [0], color="0.55", lw=1.4, label=reference_label)
+    reference_label_with_n = f"{reference_label} (N={len(ref)})"
+    ref_handle = Patch(
+        facecolor=(216 / 255, 210 / 255, 227 / 255, 0.55),
+        edgecolor="0.55",
+        linewidth=1.4,
+        label=reference_label_with_n,
+    )
     ax_pt.legend(
         [ref_handle, *pt_handles],
-        [reference_label, *pt_labels],
+        [reference_label_with_n, *pt_labels],
         loc="upper left",
         frameon=False,
         fontsize=LEGEND_FONT_SIZE,
@@ -1270,6 +1275,11 @@ TP_YLIM__nb00_c24  = (-0.5, 42)
 MARKERS_CYCLE__nb00_c24 = ['o', 's', '^', 'D', 'v', 'P', 'X', '*', '<', '>']
 LEGEND_FONT_SIZE__nb00_c24 = 13
 LEGEND_MARKER_SIZE__nb00_c24 = 8.5
+GEOROC_TAS_STYLE__nb00_c24 = dict(color="0.88", s=10, alpha=1, linewidths=0, marker="o", zorder=0, rasterized=True)
+TAS_SIO2_CANDIDATES__nb00_c24 = (TAS_SIO2_COL__nb00_c24, "SIO2(WT%)", "SiO2", "SIO2")
+TAS_NA2O_CANDIDATES__nb00_c24 = (TAS_NA2O_COL__nb00_c24, "NA2O(WT%)", "Na2O", "NA2O")
+TAS_K2O_CANDIDATES__nb00_c24 = (TAS_K2O_COL__nb00_c24, "K2O(WT%)", "K2O")
+TAS_TOTAL_ALKALI_CANDIDATES__nb00_c24 = ("TotalAlkali_liq", "Na2O + K2O", "TotalAlkali")
 
 MODEL_STYLE__nb00_c24 = {
     # Group 1: large (N >= 1500)
@@ -1372,6 +1382,40 @@ TAS_FIELD_POLYGONS__nb00_c24 = {
 
 def safe_numeric__nb00_c24(arr):
     return np.asarray(arr, dtype=float)
+
+def _get_numeric_column__nb00_c24(df, candidates):
+    """Return the first matching numeric column or a NaN array."""
+    for col in candidates:
+        if col in df.columns:
+            return safe_numeric__nb00_c24(df[col])
+    return np.full(len(df), np.nan, dtype=float)
+
+def get_valid_tas_xy__nb00_c24(df):
+    """Return finite TAS x-y arrays from either model-style or GEOROC-style liquid columns."""
+    if df is None or len(df) == 0:
+        return np.array([], dtype=float), np.array([], dtype=float)
+
+    si = _get_numeric_column__nb00_c24(df, TAS_SIO2_CANDIDATES__nb00_c24)
+    na = _get_numeric_column__nb00_c24(df, TAS_NA2O_CANDIDATES__nb00_c24)
+    k = _get_numeric_column__nb00_c24(df, TAS_K2O_CANDIDATES__nb00_c24)
+    total_alkali = _get_numeric_column__nb00_c24(df, TAS_TOTAL_ALKALI_CANDIDATES__nb00_c24)
+    alkali_from_components = na + k
+    alkali = np.where(np.isfinite(total_alkali), total_alkali, alkali_from_components)
+
+    mask = np.isfinite(si) & np.isfinite(alkali)
+    return si[mask], alkali[mask]
+
+def plot_georock_tas_background__nb00_c24(ax, georock_liq_df, georock_style=None):
+    """Plot GEOROC liquid data as a bottom-layer TAS background."""
+    gx, gy = get_valid_tas_xy__nb00_c24(georock_liq_df)
+    if gx.size == 0:
+        return 0
+
+    style = dict(GEOROC_TAS_STYLE__nb00_c24)
+    if georock_style is not None:
+        style.update(georock_style)
+    ax.scatter(gx, gy, **style)
+    return gx.size
 
 def get_n_liq__nb00_c24(model):
     X = getattr(model, 'X_liq_all', None)
@@ -1480,7 +1524,7 @@ def _draw_tas_alkaline_boundary__nb00_c24(ax, *, color="black", linewidth=2.0, z
         label="Alkaline/Subalkaline boundary",
     )[0]
 
-def add_tas_field_labels__nb00_c24(ax, *, fontsize=8.6, color="black", alpha=1.0, fontweight="bold", zorder=35):
+def add_tas_field_labels__nb00_c24(ax, *, fontsize=9, color="black", alpha=1.0, fontweight="regular", zorder=35):
     """Add manually wrapped TAS field labels for compact manuscript panels."""
     for label, x, y in TAS_FIELD_LABELS__nb00_c24:
         ax.text(
@@ -1526,13 +1570,22 @@ def _scatter_model_xy__nb00_c24(ax, x, y, style, scatter_style):
             **plot_style,
         )
 
-def plot_tas_group__nb00_c24(ax, model_names, name2model, name2style, scatter_style):
+def plot_tas_group__nb00_c24(
+    ax,
+    model_names,
+    name2model,
+    name2style,
+    scatter_style,
+    georock_liq_df=None,
+    georock_style=None,
+):
     has_liq_data = any(getattr(name2model[n], 'X_liq_all', None) is not None for n in model_names)
-    if not has_liq_data:
+    if not has_liq_data and georock_liq_df is None:
         return
 
     boundary_lines = _draw_tas_field_boundaries__nb00_c24(ax)
     boundary_collections = []
+    plot_georock_tas_background__nb00_c24(ax, georock_liq_df, georock_style=georock_style)
 
     for n in model_names:
         X = getattr(name2model[n], 'X_liq_all', None)
