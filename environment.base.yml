@@ -20,7 +20,7 @@ dependencies:
 
   # --- ML / statistics (CPU) ---
   - scikit-learn=1.5.1 # version 1.5 to avoid some warnings
-  - "xgboost=3.2=*cpu*"
+  - py-xgboost=3.2=*cpu*
   # R-backed models require rpy2 to be ABI-compatible with R.
   # Keep R pinned to the version used for manuscript reproduction.
   - r-base=4.4.3
@@ -36,7 +36,5 @@ dependencies:
 
   # --- pip-only packages ---
   - pip:
-      - pyrolite 
-      - tensorflow-cpu>=2.21,<2.22
-      - keras>=3.12,<3.13
+      - pyrolite
  
