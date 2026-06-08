@@ -64,7 +64,7 @@ def _ensure_r_helpers() -> None:
         r'''
         options(repos = c(CRAN = "https://cloud.r-project.org"))
 
-        wandb24_required_packages <- c("readxl", "ranger", "matrixStats")
+        wandb24_required_packages <- c("ranger", "matrixStats")
         wandb24_missing_packages <- wandb24_required_packages[
           !vapply(wandb24_required_packages, requireNamespace, logical(1), quietly = TRUE)
         ]
@@ -72,23 +72,27 @@ def _ensure_r_helpers() -> None:
           install.packages(wandb24_missing_packages, dependencies = TRUE)
         }
 
-        suppressPackageStartupMessages(library(readxl))
         suppressPackageStartupMessages(library(ranger))
         suppressPackageStartupMessages(library(matrixStats))
 
-        wandb24_train_two_stage <- function(training_path, target_column, numb_min, scalefac) {
+        wandb24_train_two_stage <- function(training_data, target_column, scalefac) {
           set.seed(17)
 
-          training <- readxl::read_excel(training_path, sheet = "workbook")
-          training <- subset(training, number_phases >= numb_min)
+          training <- as.data.frame(training_data)
           colnames(training) <- make.names(colnames(training))
+          target_column <- make.names(target_column)
 
           predictor_cols <- c(
             "ol", "opx", "cpx", "plag", "amph", "ox", "bt", "ksp", "gt", "qz",
             "SiO2.n.", "TiO2.n.", "Al2O3.n.", "FeO.n.", "MgO.n.", "CaO.n.", "Na2O.n.", "K2O.n."
           )
           train_cols <- c(target_column, predictor_cols)
-          y.data_train <- training[, train_cols]
+          missing_cols <- setdiff(train_cols, colnames(training))
+          if (length(missing_cols) > 0) {
+            stop(paste("Training data are missing required columns:", paste(missing_cols, collapse = ", ")))
+          }
+
+          y.data_train <- training[, train_cols, drop = FALSE]
           y_train <- y.data_train[[target_column]]
 
           model1 <- ranger::ranger(
@@ -195,13 +199,17 @@ class WandB24_melt(ModelManager):
     `MagmaTAB_Pcalc.R` scripts, but exposes it through the same Python-side
     interface used by the other thermobarometers in this project.
 
-    The model is trained every time the class is instantiated from
-    `data/WandB24/data_set/REV_MagmaTAB.xlsx`, sheet `workbook`.
+    By default, the model is trained every time the class is instantiated from
+    `data/WandB24/data_set/REV_MagmaTAB.xlsx`, sheet `workbook`. To train the
+    same two-stage model on in-memory dataframes, use
+    `WandB24_melt.train_model(training_melt=..., training_phase=..., T_P=...)`.
     Training uses the same two-stage `ranger` workflow as the bundled R scripts:
 
     1. Fit a primary `ranger` regressor to predict `T_C` or `P_kbar`.
     2. Fit a second `ranger` regressor to predict residuals from the first model.
-    3. Combine both predictions as `prediction = initial_prediction + 2 * residual_prediction`.
+    3. Combine both predictions as
+       `prediction = initial_prediction + scalefac * residual_prediction`
+       with `scalefac=2` by default.
 
     Inputs
     ------
@@ -233,6 +241,14 @@ class WandB24_melt(ModelManager):
         - `0 < filter <= 1`: keep only rows with vote SD below the selected quantile
     comments : str, optional
         Free-form metadata stored on the model instance.
+
+    Training with custom data
+    -------------------------
+    `train_model()` accepts separate `training_melt` and `training_phase`
+    dataframes. `training_melt` contains melt composition columns plus `T_C`
+    and `P_kbar`; `training_phase` contains phase-presence columns. If
+    `number_phases` is present it is used for the `NumbMin` filter; otherwise
+    phase counts are calculated from the formatted phase columns.
 
     Notes
     -----
@@ -306,7 +322,17 @@ class WandB24_melt(ModelManager):
     ):
         """Initialise, train, and prepare a WandB24 melt thermobarometer."""
         super().__init__(comments=comments)
+        self._configure_model(T_P=T_P, NumbMin=NumbMin, filter=filter, scalefac=2.0)
+        self._train_model()
 
+    def _configure_model(
+        self,
+        T_P: str,
+        NumbMin=0,
+        filter=0,
+        scalefac: float = 2.0,
+    ) -> None:
+        """Validate model options and populate shared instance attributes."""
         if T_P not in {"T", "P"}:
             raise ValueError("T_P must be 'T' or 'P'.")
 
@@ -323,7 +349,7 @@ class WandB24_melt(ModelManager):
         self.input_kind = "phase_melt"
         self.require_water = False
         self.if_support_hydrous = True
-        self.scalefac = 2.0
+        self.scalefac = float(scalefac)
 
         self.prediction_column_name = "T_C" if T_P == "T" else "P_kbar"
         self.standard_columns = self.phase_names + self.anhydrous_melt_names
@@ -333,7 +359,76 @@ class WandB24_melt(ModelManager):
         self.last_prediction_diagnostics_: Optional[pd.DataFrame] = None
         self.feature_importance_df: Optional[pd.DataFrame] = None
 
-        self._train_model()
+    @classmethod
+    def train_model(
+        cls,
+        training_melt: pd.DataFrame,
+        training_phase: pd.DataFrame,
+        T_P: str,
+        NumbMin: int = 0,
+        filter: float = 0,
+        scalefac: float = 2.0,
+        comments: Optional[str] = None,
+    ) -> "WandB24_melt":
+        """
+        Train a WandB24 melt thermobarometer from an in-memory dataframe.
+
+        Parameters
+        ----------
+        training_melt : pd.DataFrame
+            Melt training rows containing composition columns accepted by
+            `format_input()` plus both target columns, `T_C` and `P_kbar`.
+            The dataframe is copied internally and is not modified.
+        training_phase : pd.DataFrame
+            Phase training rows containing the ten phase-presence columns:
+            `ol`, `opx`, `cpx`, `plag`, `amph`, `ox`, `bt`, `ksp`, `gt`, and
+            `qz`. A `number_phases` column is optional.
+        T_P : {"T", "P"}
+            `"T"` trains a temperature model using `T_C`; `"P"` trains a
+            pressure model using `P_kbar`.
+        NumbMin : int, default 0
+            Minimum number of stable phases required for training rows and
+            later predictions. If `training_phase` has a `number_phases`
+            column, that column is used for training-row filtering; otherwise
+            phase counts are calculated from the formatted phase columns.
+        filter : float, default 0
+            Prediction-time quantile filter for first-stage tree-vote standard
+            deviations. Training itself uses all rows that pass `NumbMin` and
+            have a finite target value.
+        scalefac : float, default 2.0
+            Multiplier applied to second-stage residual predictions.
+        comments : str, optional
+            Free-form metadata stored on the returned model instance.
+
+        Returns
+        -------
+        WandB24_melt
+            A trained model instance ready for `predict()`.
+
+        Raises
+        ------
+        TypeError
+            If `training_melt` or `training_phase` is not a pandas DataFrame.
+        ValueError
+            If required columns are missing, model options are invalid, or no
+            valid training rows remain after filtering.
+
+        Examples
+        --------
+        >>> model = WandB24_melt.train_model(training_melt, training_phase, T_P="T", NumbMin=2)
+        >>> predictions = model.predict(training_melt, training_phase)
+        """
+        if not isinstance(training_melt, pd.DataFrame):
+            raise TypeError("training_melt must be a pandas DataFrame.")
+        if not isinstance(training_phase, pd.DataFrame):
+            raise TypeError("training_phase must be a pandas DataFrame.")
+
+        instance = cls.__new__(cls)
+        ModelManager.__init__(instance, comments=comments)
+        instance._configure_model(T_P=T_P, NumbMin=NumbMin, filter=filter, scalefac=scalefac)
+        instance.training_data_path = None
+        instance._train_model(training_melt=training_melt, training_phase=training_phase)
+        return instance
 
     def __str__(self):
         text = f"""
@@ -347,51 +442,142 @@ class WandB24_melt(ModelManager):
         return text
 
     def _load_training_sheet(self) -> tuple[pd.DataFrame, pd.Series]:
+        """Load the bundled workbook and prepare it for model training."""
         training = pd.read_excel(self.training_data_path, sheet_name="workbook")
-        training = training.copy()
-        training = training.loc[training["number_phases"].fillna(0) >= self.NumbMin].copy()
+        phase_cols = self.phase_names + [col for col in ["number_phases"] if col in training.columns]
+        training_phase = training[phase_cols].copy()
+        training_melt = training.drop(columns=self.phase_names, errors="ignore").copy()
+        return self._prepare_training_data(training_melt, training_phase)
 
-        target = pd.to_numeric(training[self.prediction_column_name], errors="coerce")
-        phase_df = _coerce_numeric(training[self.phase_names]).fillna(0.0)
-        phase_df = (phase_df > 0).astype(float)
+    def _validate_training_columns(
+        self,
+        training_melt: pd.DataFrame,
+        training_phase: pd.DataFrame,
+    ) -> None:
+        """Raise a clear error when custom training data cannot be formatted."""
+        target_columns = ["T_C", "P_kbar"]
+        missing_target_cols = [col for col in target_columns if col not in training_melt.columns]
+        if missing_target_cols:
+            raise ValueError(
+                "training_melt must include target columns: "
+                f"{', '.join(missing_target_cols)}."
+            )
 
-        melt_df = (
-            training[list(self.training_melt_columns)]
-            .rename(columns=self.training_melt_columns)
-            .apply(pd.to_numeric, errors="coerce")
-            .fillna(0.0)
+        missing_phase_cols = [col for col in self.phase_names if col not in training_phase.columns]
+        if missing_phase_cols:
+            raise ValueError(
+                "training_phase is missing required phase columns: "
+                f"{', '.join(missing_phase_cols)}."
+            )
+
+        formatted_melt = normalize_column_names(
+            training_melt,
+            standard_names_list=self.melt_names,
+            missing_fill=np.nan,
+            drop_missing=False,
+            report_info=False,
         )
+        missing_melt_cols = [
+            col for col in self.anhydrous_melt_names if formatted_melt[col].isna().all()
+        ]
+        if missing_melt_cols:
+            raise ValueError(
+                "training_melt is missing required melt composition columns "
+                "that can be normalized by format_input(): "
+                f"{', '.join(missing_melt_cols)}."
+            )
 
-        valid_mask = target.notna()
-        features = pd.concat([phase_df, melt_df], axis=1).loc[valid_mask, self.standard_columns]
-        filtered_training = training.loc[valid_mask].copy()
-        filtered_training.loc[:, self.phase_names] = phase_df.loc[valid_mask, self.phase_names].values
+    def _prepare_training_data(
+        self,
+        training_melt: pd.DataFrame,
+        training_phase: pd.DataFrame,
+    ) -> tuple[pd.DataFrame, pd.Series]:
+        """Prepare raw melt and phase training data using the prediction formatter."""
+        if not isinstance(training_melt, pd.DataFrame):
+            raise TypeError("training_melt must be a pandas DataFrame.")
+        if not isinstance(training_phase, pd.DataFrame):
+            raise TypeError("training_phase must be a pandas DataFrame.")
+        if training_melt.empty:
+            raise ValueError("training_melt must contain at least one row.")
+        if training_phase.empty:
+            raise ValueError("training_phase must contain at least one row.")
+        if not training_melt.index.equals(training_phase.index):
+            raise ValueError("training_melt and training_phase must have matching indexes.")
+
+        training_melt = training_melt.copy()
+        training_phase = training_phase.copy()
+        self._validate_training_columns(training_melt, training_phase)
+
+        target = pd.to_numeric(training_melt[self.prediction_column_name], errors="coerce")
+        features_all = self.format_input(training_melt, training_phase)
+
+        if "number_phases" in training_phase.columns:
+            phase_counts = pd.to_numeric(training_phase["number_phases"], errors="coerce").fillna(0.0)
+        elif "number_phases" in training_melt.columns:
+            phase_counts = pd.to_numeric(training_melt["number_phases"], errors="coerce").fillna(0.0)
+        else:
+            phase_counts = features_all[self.phase_names].sum(axis=1)
+
+        valid_mask = (phase_counts >= self.NumbMin) & target.notna()
+        features = features_all.loc[valid_mask, self.standard_columns].copy()
+        y_train = target.loc[valid_mask].copy()
 
         if features.empty:
             raise ValueError("No valid training rows remain after applying NumbMin and target filtering.")
 
-        self.X_phase_training = filtered_training[self.phase_names + [self.prediction_column_name]].copy()
-        self.X_melt_training = melt_df.loc[valid_mask, self.anhydrous_melt_names].copy()
+        self.X_phase_training = features[self.phase_names].copy()
+        if "number_phases" in training_phase.columns:
+            self.X_phase_training["number_phases"] = phase_counts.loc[valid_mask].to_numpy()
+
+        self.X_melt_training = features[self.anhydrous_melt_names].copy()
+        for target_column in ["T_C", "P_kbar"]:
+            self.X_melt_training[target_column] = pd.to_numeric(
+                training_melt.loc[valid_mask, target_column],
+                errors="coerce",
+            )
         self.X_phase_test = None
         self.X_melt_test = None
         self.X_phase_all = self.X_phase_training.copy()
         self.X_melt_all = self.X_melt_training.copy()
-        self.y_min = float(target.loc[valid_mask].min())
-        self.y_max = float(target.loc[valid_mask].max())
-        self.y_min_95 = float(target.loc[valid_mask].quantile(0.025))
-        self.y_max_95 = float(target.loc[valid_mask].quantile(0.975))
+        self.y_min = float(y_train.min())
+        self.y_max = float(y_train.max())
+        self.y_min_95 = float(y_train.quantile(0.025))
+        self.y_max_95 = float(y_train.quantile(0.975))
 
-        return features, target.loc[valid_mask]
+        return features, y_train
 
-    def _train_model(self) -> None:
-        X_train, y_train = self._load_training_sheet()
+    def _format_training_data_for_r(
+        self,
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+    ) -> pd.DataFrame:
+        """Return a training frame with R-compatible predictor names."""
+        training_for_r = _rename_predictors_for_r(X_train, self.r_predictor_name_map)
+        training_for_r.insert(0, self.prediction_column_name, y_train.to_numpy(dtype=float))
+        return training_for_r
+
+    def _train_model(
+        self,
+        training_melt: Optional[pd.DataFrame] = None,
+        training_phase: Optional[pd.DataFrame] = None,
+    ) -> None:
+        if training_melt is None and training_phase is None:
+            X_train, y_train = self._load_training_sheet()
+        elif training_melt is not None and training_phase is not None:
+            X_train, y_train = self._prepare_training_data(training_melt, training_phase)
+        else:
+            raise ValueError("training_melt and training_phase must be provided together.")
+
         _ensure_r_helpers()
 
+        training_for_r = self._format_training_data_for_r(X_train, y_train)
         train_two_stage = robjects.globalenv["wandb24_train_two_stage"]
+        with localconverter(default_converter + pandas2ri.converter):
+            training_for_r = pandas2ri.py2rpy(training_for_r)
+
         model_bundle = train_two_stage(
-            str(self.training_data_path),
+            training_for_r,
             self.prediction_column_name,
-            self.NumbMin,
             float(self.scalefac),
         )
 
@@ -414,9 +600,15 @@ class WandB24_melt(ModelManager):
             if not embedded_phase:
                 raise ValueError(
                     "Phase presence data are required. Pass X_phase or include phase columns in X_melt."
-                )
+            )
             phase_input = X_melt
         else:
+            if not X_phase.index.equals(X_melt.index):
+                raise ValueError(
+                    "X_phase index must match X_melt index exactly. "
+                    "Align both dataframes before prediction, or reset both indexes "
+                    "after verifying that their row order is identical."
+                )
             phase_input = X_phase
 
         phase_df = phase_input.reindex(index=X_melt.index, columns=self.phase_names)
@@ -538,12 +730,33 @@ class WandB24_melt(ModelManager):
         self,
         test_X_phase: pd.DataFrame,
         test_X_melt: Optional[pd.DataFrame] = None,
+        input_name: str = "test_X_phase",
     ) -> pd.DataFrame:
         if test_X_melt is None:
+            self._validate_embedded_melt_columns(test_X_phase, input_name=input_name)
             formatted = self.format_input(test_X_phase)
         else:
             formatted = self.format_input(test_X_melt, test_X_phase)
         return formatted.reindex(columns=self.standard_columns).fillna(0.0)
+
+    def _validate_embedded_melt_columns(self, data: pd.DataFrame, input_name: str) -> None:
+        """Require melt compositions when SHAP receives a single combined dataframe."""
+        formatted_melt = normalize_column_names(
+            data,
+            standard_names_list=self.melt_names,
+            missing_fill=np.nan,
+            drop_missing=False,
+            report_info=False,
+        )
+        missing_melt_cols = [
+            col for col in self.anhydrous_melt_names if formatted_melt[col].isna().all()
+        ]
+        if missing_melt_cols:
+            raise ValueError(
+                f"{input_name} must include melt composition columns when the separate "
+                "melt dataframe is not provided. Missing or all-NaN columns after "
+                f"normalization: {', '.join(missing_melt_cols)}."
+            )
 
     def shap_calculation(
         self,
@@ -571,7 +784,11 @@ class WandB24_melt(ModelManager):
 
         shap.initjs()
 
-        shap_features = self._format_shap_input(test_X_phase, test_X_melt)
+        shap_features = self._format_shap_input(
+            test_X_phase,
+            test_X_melt,
+            input_name="test_X_phase",
+        )
         if background_data is None or background_data.empty:
             background_features = pd.concat(
                 [
@@ -581,7 +798,11 @@ class WandB24_melt(ModelManager):
                 axis=1,
             ).reindex(columns=self.standard_columns)
         else:
-            background_features = self._format_shap_input(background_data, bg_melt)
+            background_features = self._format_shap_input(
+                background_data,
+                bg_melt,
+                input_name="background_data",
+            )
 
         if sampling_test is not None:
             shap_features = random_sample_reduce_data(shap_features, sampling_test, 42)
@@ -683,21 +904,33 @@ def _run_simple_test() -> None:
 
 
     X_phase = sample[phase_cols].copy()
+    training_phase = sample[phase_cols + ["number_phases"]].copy()
+    training_melt = sample[melt_cols + ["T_C", "P_kbar"]].copy()
     X_melt_only = sample[melt_cols].copy()
     X_melt_with_phase = sample[phase_cols + melt_cols].copy()
 
     t_model = WandB24_melt("T", NumbMin=2, filter=0)
     p_model = WandB24_melt("P", NumbMin=2, filter=0)
+    custom_p_model = WandB24_melt.train_model(
+        training_melt=training_melt,
+        training_phase=training_phase,
+        T_P="P",
+        NumbMin=2,
+        filter=0,
+    )
 
     t_pred = t_model.predict(X_melt_with_phase)
     p_pred = p_model.predict(X_melt_only, X_phase=X_phase)
+    custom_p_pred = custom_p_model.predict(X_melt_only, X_phase=X_phase)
 
-    if len(t_pred) != len(sample) or len(p_pred) != len(sample):
+    if len(t_pred) != len(sample) or len(p_pred) != len(sample) or len(custom_p_pred) != len(sample):
         raise AssertionError("Prediction length does not match the sample length.")
     if t_pred.isna().all():
         raise AssertionError("Temperature smoke test returned all-NaN predictions.")
     if p_pred.isna().all():
         raise AssertionError("Pressure smoke test returned all-NaN predictions.")
+    if custom_p_pred.isna().all():
+        raise AssertionError("Custom pressure smoke test returned all-NaN predictions.")
 
     result = pd.DataFrame(
         {
@@ -705,6 +938,7 @@ def _run_simple_test() -> None:
             "T_C_pred": t_pred.to_numpy(),
             "P_kbar_obs": sample["P_kbar"].to_numpy(),
             "P_kbar_pred": p_pred.to_numpy(),
+            "P_kbar_custom_pred": custom_p_pred.to_numpy(),
         },
         index=sample.index,
     )
