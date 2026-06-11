@@ -1,4 +1,6 @@
-"""WandB24 melt thermobarometry wrapper."""
+"""WandB24 melt thermobarometry wrapper.
+Weber, G., & Blundy, J. (2024). A Machine Learning-Based Thermobarometer for Magmatic Liquids. Journal of Petrology, 65(4), egae020. https://doi.org/10.1093/petrology/egae020
+"""
 
 from __future__ import annotations
 

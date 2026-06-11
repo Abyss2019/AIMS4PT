@@ -2,8 +2,20 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Mapping, Optional, Sequence
+
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
+from matplotlib.ticker import AutoMinorLocator, FixedLocator, NullLocator
+from matplotlib.transforms import blended_transform_factory
 import numpy as np
 import pandas as pd
+
+from aims4pt.toolkit_utils import wrap_text
 
 
 MERAPI_2006_COLOR = "#3995d6"
@@ -410,6 +422,2666 @@ def plot_merapi_composition_comparison(
     return fig, axes
 
 
+# Ranked Merapi thermobarometry figure helpers.
+MANUSCRIPT_AXIS_LABEL_SIZE = 19
+MANUSCRIPT_Y_AXIS_LABEL_SIZE = 20
+MANUSCRIPT_TICK_LABEL_SIZE = 16
+MANUSCRIPT_MODEL_TICK_LABEL_SIZE = 17
+MANUSCRIPT_GROUP_LABEL_SIZE = 19
+MANUSCRIPT_LEGEND_SIZE = 16
+MANUSCRIPT_PANEL_LABEL_SIZE = 20
+MANUSCRIPT_ANNOTATION_SIZE = 15
+MANUSCRIPT_RESERVOIR_LABEL_SIZE = 17
+MANUSCRIPT_THIS_STUDY_AXIS_LABEL_SIZE = 21
+MANUSCRIPT_THIS_STUDY_Y_AXIS_LABEL_SIZE = 24
+MANUSCRIPT_THIS_STUDY_TICK_LABEL_SIZE = 17
+MANUSCRIPT_THIS_STUDY_MODEL_TICK_LABEL_SIZE = 22
+MANUSCRIPT_THIS_STUDY_GROUP_LABEL_SIZE = 23
+MANUSCRIPT_THIS_STUDY_ANNOTATION_SIZE = 17
+MANUSCRIPT_THIS_STUDY_LEGEND_SIZE = 17
+
+@dataclass
+class ThermobarometryWorkflowBundle:
+    """
+    Container for one workflow family across pressure/temperature and eruption year.
+
+    Parameters
+    ----------
+    pressure_2006, pressure_2010, temperature_2006, temperature_2010
+        Workflow objects that expose ``prediction_df`` and
+        ``get_best_model_series()``.
+
+    Notes
+    -----
+    This class is optional. The plotting helpers below also accept dictionaries
+    with equivalent keys such as ``pressure_2006`` / ``temperature_2010`` or a
+    nested form like ``{"P": {"2006": ...}, "T": {"2010": ...}}``.
+    """
+
+    pressure_2006: Any
+    pressure_2010: Any
+    temperature_2006: Any
+    temperature_2010: Any
+
+
+def _coerce_workflow_bundle(bundle: Any, label: str) -> ThermobarometryWorkflowBundle:
+    if isinstance(bundle, ThermobarometryWorkflowBundle):
+        return bundle
+
+    if not isinstance(bundle, Mapping):
+        raise TypeError(
+            f"{label} must be a ThermobarometryWorkflowBundle or mapping, got {type(bundle)!r}."
+        )
+
+    flat_keys = {"pressure_2006", "pressure_2010", "temperature_2006", "temperature_2010"}
+    if flat_keys.issubset(bundle):
+        return ThermobarometryWorkflowBundle(
+            pressure_2006=bundle["pressure_2006"],
+            pressure_2010=bundle["pressure_2010"],
+            temperature_2006=bundle["temperature_2006"],
+            temperature_2010=bundle["temperature_2010"],
+        )
+
+    short_keys = {"P_2006", "P_2010", "T_2006", "T_2010"}
+    if short_keys.issubset(bundle):
+        return ThermobarometryWorkflowBundle(
+            pressure_2006=bundle["P_2006"],
+            pressure_2010=bundle["P_2010"],
+            temperature_2006=bundle["T_2006"],
+            temperature_2010=bundle["T_2010"],
+        )
+
+    if "P" in bundle and "T" in bundle:
+        pressure_map = bundle["P"]
+        temperature_map = bundle["T"]
+        if not isinstance(pressure_map, Mapping) or not isinstance(temperature_map, Mapping):
+            raise TypeError(f"{label}['P'] and {label}['T'] must be mappings.")
+
+        def _pick_year(mapping: Mapping[Any, Any], year: str) -> Any:
+            if year in mapping:
+                return mapping[year]
+            year_int = int(year)
+            if year_int in mapping:
+                return mapping[year_int]
+            raise KeyError(year)
+
+        return ThermobarometryWorkflowBundle(
+            pressure_2006=_pick_year(pressure_map, "2006"),
+            pressure_2010=_pick_year(pressure_map, "2010"),
+            temperature_2006=_pick_year(temperature_map, "2006"),
+            temperature_2010=_pick_year(temperature_map, "2010"),
+        )
+
+    raise KeyError(
+        f"{label} must provide either flat keys {sorted(flat_keys)}, short keys {sorted(short_keys)}, "
+        "or nested keys {'P': {'2006', '2010'}, 'T': {'2006', '2010'}}."
+    )
+
+
+def _coerce_phase_column_groups(columns: Mapping[str, Sequence[str]], label: str) -> dict[str, list[str]]:
+    if not isinstance(columns, Mapping):
+        raise TypeError(f"{label} must be a mapping with 'cpx_only' and 'cpx_liq' keys.")
+
+    required = {"cpx_only", "cpx_liq"}
+    missing = required.difference(columns)
+    if missing:
+        raise KeyError(f"{label} is missing required keys: {sorted(missing)}")
+
+    return {
+        "cpx_only": list(columns["cpx_only"]),
+        "cpx_liq": list(columns["cpx_liq"]),
+    }
+
+
+def _get_prediction_df_from_workflow(workflow: Any, workflow_label: str) -> pd.DataFrame:
+    if not hasattr(workflow, "prediction_df"):
+        raise AttributeError(f"{workflow_label} does not expose prediction_df.")
+    prediction_df = workflow.prediction_df
+    if not isinstance(prediction_df, pd.DataFrame):
+        raise TypeError(f"{workflow_label}.prediction_df must be a pandas DataFrame.")
+    return prediction_df
+
+
+def _get_best_model_series_from_workflow(workflow: Any, workflow_label: str) -> pd.Series:
+    if not hasattr(workflow, "get_best_model_series"):
+        raise AttributeError(f"{workflow_label} does not expose get_best_model_series().")
+    best_model_series = workflow.get_best_model_series()
+    if not isinstance(best_model_series, pd.Series):
+        raise TypeError(f"{workflow_label}.get_best_model_series() must return a pandas Series.")
+    return best_model_series
+
+
+def _extract_plot_arrays(df: pd.DataFrame, columns: Sequence[str], *, df_label: str) -> list[np.ndarray]:
+    missing = [col for col in columns if col not in df.columns]
+    if missing:
+        raise KeyError(f"{df_label} is missing required columns: {missing}")
+    return [df[col].dropna().to_numpy() for col in columns]
+
+
+def _build_uncertainty_dict(model_pool: Optional[Sequence[Any]]) -> dict[str, float]:
+    if model_pool is None:
+        return {}
+    return {
+        getattr(model, "model_name", str(i)): getattr(model, "uncertainty", np.nan)
+        for i, model in enumerate(model_pool)
+    }
+
+
+def _remove_boxplot_outliers(values: Sequence[float]) -> np.ndarray:
+    arr = np.asarray(values, dtype=float).ravel()
+    arr = arr[np.isfinite(arr)]
+    if arr.size <= 3:
+        return arr
+
+    q1 = np.nanpercentile(arr, 25)
+    q3 = np.nanpercentile(arr, 75)
+    iqr = q3 - q1
+    if not np.isfinite(iqr) or iqr == 0:
+        return arr
+
+    lower = q1 - 1.5 * iqr
+    upper = q3 + 1.5 * iqr
+    return arr[(arr >= lower) & (arr <= upper)]
+
+
+def _filter_data_groups(data_groups: Sequence[Sequence[float]]) -> list[np.ndarray]:
+    return [_remove_boxplot_outliers(values) for values in data_groups]
+
+
+def _coerce_result_array(values: Any, label: str) -> np.ndarray:
+    if isinstance(values, pd.Series):
+        series = values
+    elif isinstance(values, pd.DataFrame):
+        if values.shape[1] == 1:
+            series = values.iloc[:, 0]
+        elif "prediction" in values.columns:
+            series = values["prediction"]
+        else:
+            raise TypeError(f"{label} must be a Series, array-like, or single-column DataFrame.")
+    else:
+        try:
+            series = pd.Series(np.asarray(values, dtype=float).ravel())
+        except Exception as exc:
+            raise TypeError(f"{label} must be numeric and array-like.") from exc
+
+    numeric = pd.to_numeric(series, errors="coerce")
+    return _remove_boxplot_outliers(numeric.dropna().to_numpy())
+
+
+def _compute_rank_pcts_from_best(best_model_series: pd.Series) -> list[tuple[str, float]]:
+    counts = best_model_series.dropna().astype(str).value_counts()
+    total = counts.sum()
+    if total == 0:
+        return []
+    pcts = counts / total * 100.0
+    return list(zip(pcts.index.tolist(), pcts.values.tolist()))
+
+
+def _model_to_index(columns: Sequence[str], model_name: str) -> Optional[int]:
+    try:
+        return list(columns).index(model_name)
+    except ValueError:
+        return None
+
+
+def _pick_models_for_single_eruption(
+    rank_pcts: Sequence[tuple[str, float]],
+    threshold: float,
+) -> list[str]:
+    if len(rank_pcts) == 0:
+        return []
+    rank1_name, rank1_pct = rank_pcts[0]
+    if float(rank1_pct) > threshold or len(rank_pcts) == 1:
+        return [rank1_name]
+    return [rank1_name, rank_pcts[1][0]]
+
+
+def _selected_rank_set_from_topk(topk: Sequence[tuple[str, float]], threshold: float) -> set[int]:
+    if not topk:
+        return set()
+    if float(topk[0][1]) > threshold or len(topk) == 1:
+        return {0}
+    return {0, 1}
+
+
+def _finite_uncertainty(value: Any) -> Optional[float]:
+    try:
+        value = float(value)
+    except Exception:
+        return None
+    if not np.isfinite(value) or value < 0:
+        return None
+    return value
+
+
+def _clean_str(value: Any) -> str:
+    if pd.isna(value):
+        return ""
+    return str(value).strip()
+
+
+def _strip_parens(value: Any) -> str:
+    text = _clean_str(value)
+    if text.startswith("(") and text.endswith(")"):
+        return text[1:-1].strip()
+    return text
+
+
+def _wrap_label(value: Any, width: int = 12, *, allow_word_break: bool = False) -> str:
+    return wrap_text(str(value), max_width=width, allow_word_break=allow_word_break)
+
+
+def _apply_threshold_xtick_rotation(
+    ax: plt.Axes,
+    raw_labels: Sequence[Any],
+    *,
+    rotation_threshold: int = 22,
+    long_label_fontsize_scale: float = 0.86,
+) -> None:
+    for tick_label, raw_label in zip(ax.get_xticklabels(), raw_labels):
+        tick_label.set_rotation(0)
+        tick_label.set_ha("center")
+        tick_label.set_va("top")
+        if len(str(raw_label)) > rotation_threshold:
+            tick_label.set_fontsize(tick_label.get_fontsize() * long_label_fontsize_scale)
+        tick_label.set_linespacing(0.95)
+
+
+def _pick_kind_mapping(mapping: Optional[Mapping[str, Any]], kind: str) -> Optional[Mapping[str, Any]]:
+    if mapping is None:
+        return None
+
+    direct_value = mapping.get(kind)
+    if direct_value is not None:
+        return direct_value
+
+    alias = "pressure" if kind == "P" else "temperature"
+    alias_value = mapping.get(alias)
+    if alias_value is not None:
+        return alias_value
+
+    return None
+
+
+def _coerce_liquid_kind_results(kind: str, liquid_results: Optional[Mapping[str, Any]]) -> dict[str, dict[str, np.ndarray]]:
+    kind_mapping = _pick_kind_mapping(liquid_results, kind)
+    if kind_mapping is None:
+        return {}
+    if not isinstance(kind_mapping, Mapping):
+        raise TypeError(f"liquid_results[{kind!r}] must be a mapping.")
+
+    coerced: dict[str, dict[str, np.ndarray]] = {}
+    for year in ("2006", "2010"):
+        year_mapping = kind_mapping.get(year, kind_mapping.get(int(year)))
+        if year_mapping is None:
+            continue
+        if not isinstance(year_mapping, Mapping):
+            raise TypeError(f"liquid_results[{kind!r}][{year!r}] must be a mapping.")
+
+        phase_results: dict[str, np.ndarray] = {}
+        for phase_name in ("glass", "bulk"):
+            if phase_name not in year_mapping or year_mapping[phase_name] is None:
+                continue
+            phase_results[phase_name] = _coerce_result_array(
+                year_mapping[phase_name],
+                f"liquid_results[{kind!r}][{year!r}][{phase_name!r}]",
+            )
+
+        if phase_results:
+            coerced[year] = phase_results
+
+    return coerced
+
+
+def _liquid_prediction_uncertainty(kind: str, phase_name: str) -> float:
+    uncertainty_map = {
+        ("P", "glass"): 1.66,
+        ("P", "bulk"): 1.29,
+        ("T", "glass"): 31.9,
+        ("T", "bulk"): 26.2,
+    }
+    return uncertainty_map[(kind, phase_name)]
+
+
+def _short_model_name(model_name: str) -> str:
+    return _clean_str(model_name).split("(")[0].strip()
+
+
+def _model_axis_label(model_name: str, kind: Optional[str] = None, *, use_model_abbreviations: bool = False) -> str:
+    if not use_model_abbreviations:
+        return _short_model_name(model_name)
+    if kind is None:
+        return _short_model_name(model_name)
+    try:
+        from paper.scripts.constants_illustration import get_model_abbreviation
+    except Exception:
+        return _short_model_name(model_name)
+    label = get_model_abbreviation(model_name, kind)
+    if label == model_name:
+        return _short_model_name(model_name)
+    if label.startswith("Pu08_"):
+        return "Pu08\n_" + label.split("_", 1)[1]
+    return label
+
+
+def _display_phase_type_label(value: Any) -> str:
+    label = _clean_str(value)
+    key = label.lower().replace("_", "-").replace(" ", "-")
+    if key in {"cpx-only", "clinopyroxene-only"}:
+        return "Clinopyroxene-only"
+    if key in {"cpx-liq", "cpx-liquid", "clinopyroxene-liquid"}:
+        return "Clinopyroxene-liquid"
+    return label
+
+
+def _style_bp_item(
+    bp: Mapping[str, Any],
+    box_idx: int,
+    facecolor: str,
+    edgecolor: str = "k",
+    lw: float = 1.2,
+    alpha: float = 1.0,
+    median_color: Optional[str] = None,
+    median_lw: Optional[float] = None,
+) -> None:
+    box = bp["boxes"][box_idx]
+    box.set_facecolor(facecolor)
+    box.set_alpha(alpha)
+    box.set_edgecolor(edgecolor)
+    box.set_linewidth(lw)
+    box.set_zorder(3)
+
+    median = bp["medians"][box_idx]
+    median.set_color(median_color if median_color is not None else edgecolor)
+    median.set_linewidth(median_lw if median_lw is not None else lw)
+    median.set_zorder(4)
+
+    whisker_low = bp["whiskers"][2 * box_idx]
+    whisker_high = bp["whiskers"][2 * box_idx + 1]
+    cap_low = bp["caps"][2 * box_idx]
+    cap_high = bp["caps"][2 * box_idx + 1]
+    for obj in (whisker_low, whisker_high, cap_low, cap_high):
+        obj.set_color(edgecolor)
+        obj.set_linewidth(lw)
+        obj.set_zorder(4)
+
+
+def _draw_violin(
+    ax: plt.Axes,
+    data_list: Sequence[Sequence[float]],
+    positions: Sequence[float],
+    *,
+    widths: float = 0.28,
+    facecolor: str = "blue",
+    edgecolor: str = "k",
+    lw: float = 1.2,
+    alpha: float = 1.0,
+    bw_method: float = 0.25,
+    zorder: float = 3,
+) -> Mapping[str, Any]:
+    vp = ax.violinplot(
+        data_list,
+        positions=positions,
+        widths=widths,
+        showmeans=False,
+        showmedians=True,
+        showextrema=False,
+        bw_method=bw_method,
+    )
+    for body in vp["bodies"]:
+        body.set_facecolor(facecolor)
+        body.set_edgecolor(edgecolor)
+        body.set_linewidth(lw)
+        body.set_alpha(alpha)
+        body.set_zorder(zorder)
+
+    if "cmedians" in vp:
+        vp["cmedians"].set_color("k")
+        vp["cmedians"].set_linewidth(max(lw, 1.2))
+        vp["cmedians"].set_zorder(zorder + 1)
+    return vp
+
+
+def _add_vertical_uncertainty_band(
+    ax: plt.Axes,
+    x_center: float,
+    values: Sequence[float],
+    uncertainty: Any,
+    width: float,
+    color: str,
+    *,
+    alpha: float = 0.16,
+    zorder: float = 2,
+) -> None:
+    finite_uncertainty = _finite_uncertainty(uncertainty)
+    clean_values = _remove_boxplot_outliers(values)
+    if finite_uncertainty is None or clean_values.size == 0:
+        return
+
+    median = float(np.nanmedian(clean_values))
+    x0 = float(x_center) - width / 2.0
+    x1 = float(x_center) + width / 2.0
+    y0 = median - finite_uncertainty
+    y1 = median + finite_uncertainty
+    ax.fill_between([x0, x1], [y0, y0], [y1, y1], color=color, alpha=alpha, zorder=zorder, linewidth=0)
+    ax.hlines(median, x0, x1, color=color, lw=1.8, zorder=zorder + 0.2)
+
+
+def _add_vertical_uncertainty_band_from_median(
+    ax: plt.Axes,
+    x_center: float,
+    median: float,
+    uncertainty: Any,
+    width: float,
+    color: str,
+    *,
+    alpha: float = 0.16,
+    zorder: float = 2,
+    median_marker: str = "line",
+) -> None:
+    finite_uncertainty = _finite_uncertainty(uncertainty)
+    if finite_uncertainty is None or median is None or not np.isfinite(median):
+        return
+
+    x0 = float(x_center) - width / 2.0
+    x1 = float(x_center) + width / 2.0
+    y0 = float(median) - finite_uncertainty
+    y1 = float(median) + finite_uncertainty
+    ax.fill_between([x0, x1], [y0, y0], [y1, y1], color=color, alpha=alpha, zorder=zorder, linewidth=0)
+    if median_marker == "dot":
+        ax.scatter([float(x_center)], [float(median)], s=22, color=color, zorder=zorder + 0.3)
+    else:
+        ax.hlines(float(median), x0 + 0.28 * width, x1 - 0.28 * width, color=color, lw=1.4, zorder=zorder + 0.2)
+
+
+def _add_subgroup_background(
+    ax: plt.Axes,
+    x_center: float,
+    width: float,
+    color: str,
+    *,
+    alpha: float = 0.12,
+    zorder: float = 1,
+) -> None:
+    x0 = float(x_center) - width / 2.0
+    x1 = float(x_center) + width / 2.0
+    ax.axvspan(x0, x1, color=color, alpha=alpha, zorder=zorder)
+
+
+def _style_selected_violin(
+    vp: Mapping[str, Any],
+    body_idx: int,
+    *,
+    edgecolor: str = "k",
+    lw: float = 3.0,
+    linestyle: str = "--",
+) -> None:
+    body = vp["bodies"][body_idx]
+    body.set_edgecolor(edgecolor)
+    body.set_linewidth(lw)
+    body.set_linestyle(linestyle)
+    body.set_zorder(4.2)
+
+
+def _redraw_violin_median(
+    ax: plt.Axes,
+    x_center: float,
+    values: Sequence[float],
+    width: float,
+    *,
+    color: str = "k",
+    lw: float = 1.8,
+    zorder: float = 4.6,
+) -> None:
+    clean_values = _remove_boxplot_outliers(values)
+    if clean_values.size == 0:
+        return
+    median = float(np.nanmedian(clean_values))
+    half_width = 0.24 * width
+    ax.hlines(median, float(x_center) - half_width, float(x_center) + half_width, color=color, lw=lw, zorder=zorder)
+
+
+def _annotate_above_data(
+    ax: plt.Axes,
+    x: float,
+    data: Sequence[float],
+    text: str,
+    color: str,
+    *,
+    y_pad_frac: float = 0.04,
+    fontsize: float = 14,
+    va: str = "bottom",
+    y_shift: float = 0.0,
+) -> None:
+    clean_values = np.asarray(data, dtype=float)
+    clean_values = clean_values[np.isfinite(clean_values)]
+    if clean_values.size == 0:
+        return
+    y_top = float(np.nanmax(clean_values))
+    y_min, y_max = ax.get_ylim()
+    y_pad = (y_max - y_min) * y_pad_frac
+    ax.text(
+        float(x),
+        y_top + y_pad + y_shift,
+        text,
+        color=color,
+        fontsize=fontsize,
+        fontweight="bold",
+        ha="center",
+        va=va,
+        zorder=10,
+    )
+
+
+def _boxplot_whisker_bounds(data: Sequence[float], whis: float = 1.5) -> Optional[tuple[float, float]]:
+    clean_values = np.asarray(data, dtype=float)
+    clean_values = clean_values[np.isfinite(clean_values)]
+    if clean_values.size == 0:
+        return None
+    if clean_values.size <= 3:
+        return float(np.nanmin(clean_values)), float(np.nanmax(clean_values))
+
+    q1 = float(np.nanpercentile(clean_values, 25))
+    q3 = float(np.nanpercentile(clean_values, 75))
+    iqr = q3 - q1
+    if not np.isfinite(iqr) or iqr == 0:
+        return float(np.nanmin(clean_values)), float(np.nanmax(clean_values))
+
+    lower_fence = q1 - whis * iqr
+    upper_fence = q3 + whis * iqr
+    lower_whisker = float(np.nanmin(clean_values[clean_values >= lower_fence]))
+    upper_whisker = float(np.nanmax(clean_values[clean_values <= upper_fence]))
+    return lower_whisker, upper_whisker
+
+
+def _annotate_above_boxplot_whisker(
+    ax: plt.Axes,
+    x: float,
+    data: Sequence[float],
+    text: str,
+    color: str,
+    *,
+    y_pad_frac: float = 0.04,
+    fontsize: float = 14,
+    va: str = "bottom",
+    y_shift: float = 0.0,
+    whisker: str = "upper",
+) -> None:
+    bounds = _boxplot_whisker_bounds(data)
+    if bounds is None:
+        return
+    lower_whisker, upper_whisker = bounds
+    y_anchor = lower_whisker if whisker == "lower" else upper_whisker
+    y_min, y_max = ax.get_ylim()
+    y_pad = (y_max - y_min) * y_pad_frac
+    ax.text(
+        float(x),
+        y_anchor + y_pad + y_shift,
+        text,
+        color=color,
+        fontsize=fontsize,
+        fontweight="bold",
+        ha="center",
+        va=va,
+        zorder=10,
+    )
+
+
+def _annotate_grouped_box_label(
+    ax: plt.Axes,
+    x: float,
+    y: float,
+    text: str,
+    *,
+    fontsize: float = 11.5,
+    color: str = "0.20",
+) -> None:
+    ax.text(
+        float(x),
+        float(y),
+        text,
+        ha="center",
+        va="center",
+        fontsize=fontsize,
+        color=color,
+        zorder=6,
+        clip_on=True,
+    )
+
+
+def _apply_pressure_depth_axes(
+    ax: plt.Axes,
+    *,
+    densities_kg_m3: Optional[Sequence[float]] = None,
+    layer_boundaries_km: Optional[Sequence[float]] = None,
+    pressure_ylim: Optional[tuple[float, float]] = None,
+    pressure_ticks: Optional[Sequence[float]] = None,
+    depth_tick_step: float = 5,
+    depth_max: float = 37,
+    label_fontsize: float = MANUSCRIPT_Y_AXIS_LABEL_SIZE,
+    tick_labelsize: float = MANUSCRIPT_TICK_LABEL_SIZE,
+    depth_label_fontsize: Optional[float] = None,
+    depth_tick_labelsize: Optional[float] = None,
+) -> plt.Axes:
+    depth_label_fontsize = label_fontsize if depth_label_fontsize is None else depth_label_fontsize
+    depth_tick_labelsize = tick_labelsize if depth_tick_labelsize is None else depth_tick_labelsize
+
+    ax.set_ylabel("Pressure (kbar)", fontsize=label_fontsize)
+    if pressure_ylim is not None:
+        ax.set_ylim(*pressure_ylim)
+    if pressure_ticks is not None:
+        ax.set_yticks(list(pressure_ticks))
+    ax.invert_yaxis()
+
+    depth_ticks_km = np.arange(0, depth_max + depth_tick_step, depth_tick_step)
+    ax_depth = ax.secondary_yaxis(
+        "right",
+        functions=(
+            lambda pressure_kbar: _pressure_to_depth_km(
+                pressure_kbar,
+                densities_kg_m3=densities_kg_m3,
+                layer_boundaries_km=layer_boundaries_km,
+            ),
+            lambda depth_km: _depth_to_pressure_kbar(
+                depth_km,
+                densities_kg_m3=densities_kg_m3,
+                layer_boundaries_km=layer_boundaries_km,
+            ),
+        ),
+    )
+    ax_depth.yaxis.set_major_locator(FixedLocator(depth_ticks_km))
+    ax_depth.set_yticklabels([f"{int(d)}" for d in depth_ticks_km])
+    ax_depth.set_ylabel("Depth (km)", rotation=-90, va="bottom", labelpad=10, fontsize=depth_label_fontsize)
+
+    ax.yaxis.set_minor_locator(AutoMinorLocator(2))
+    ax_depth.yaxis.set_minor_locator(NullLocator())
+    ax.tick_params(axis="y", which="minor", length=3, width=0.8)
+    ax.tick_params(axis="y", which="major", length=6, width=1.0, labelsize=tick_labelsize)
+    ax_depth.tick_params(axis="y", which="minor", length=0)
+    ax_depth.tick_params(axis="y", which="major", length=6, width=1.0, labelsize=depth_tick_labelsize)
+    return ax_depth
+
+
+def _validate_multilayer_depth_conversion(
+    densities_kg_m3: Optional[Sequence[float]],
+    layer_boundaries_km: Optional[Sequence[float]],
+) -> None:
+    if densities_kg_m3 is None or layer_boundaries_km is None:
+        raise ValueError(
+            "densities_kg_m3 and layer_boundaries_km must be provided together."
+        )
+
+
+def _pressure_to_depth_km(
+    pressure_kbar: Any,
+    *,
+    densities_kg_m3: Optional[Sequence[float]] = None,
+    layer_boundaries_km: Optional[Sequence[float]] = None,
+) -> Any:
+    _validate_multilayer_depth_conversion(densities_kg_m3, layer_boundaries_km)
+    from aims4pt.data_tools.crust import (
+        DEFAULT_G,
+        KBAR_TO_PA,
+        M_PER_KM,
+        kbar_to_km_multilayer,
+    )
+
+    pressure_arr = np.asarray(pressure_kbar, dtype=float)
+    depth_km = np.empty_like(pressure_arr, dtype=float)
+    positive_mask = pressure_arr >= 0
+
+    if np.any(positive_mask):
+        depth_km[positive_mask] = kbar_to_km_multilayer(
+            pressure_arr[positive_mask],
+            densities_kg_m3=densities_kg_m3,
+            layer_boundaries_km=layer_boundaries_km,
+        )
+    if np.any(~positive_mask):
+        density_kg_m3 = float(np.asarray(densities_kg_m3, dtype=float)[0])
+        depth_km[~positive_mask] = (
+            pressure_arr[~positive_mask] * KBAR_TO_PA / (density_kg_m3 * DEFAULT_G) / M_PER_KM
+        )
+
+    if np.isscalar(pressure_kbar):
+        return float(depth_km)
+    return depth_km
+
+
+def _depth_to_pressure_kbar(
+    depth_km: Any,
+    *,
+    densities_kg_m3: Optional[Sequence[float]] = None,
+    layer_boundaries_km: Optional[Sequence[float]] = None,
+) -> Any:
+    _validate_multilayer_depth_conversion(densities_kg_m3, layer_boundaries_km)
+    from aims4pt.data_tools.crust import (
+        DEFAULT_G,
+        KBAR_TO_PA,
+        M_PER_KM,
+        km_to_kbar_multilayer,
+    )
+
+    depth_arr = np.asarray(depth_km, dtype=float)
+    pressure_kbar = np.empty_like(depth_arr, dtype=float)
+    positive_mask = depth_arr >= 0
+
+    if np.any(positive_mask):
+        pressure_kbar[positive_mask] = km_to_kbar_multilayer(
+            depth_arr[positive_mask],
+            densities_kg_m3=densities_kg_m3,
+            layer_boundaries_km=layer_boundaries_km,
+        )
+    if np.any(~positive_mask):
+        density_kg_m3 = float(np.asarray(densities_kg_m3, dtype=float)[0])
+        pressure_kbar[~positive_mask] = (
+            density_kg_m3 * DEFAULT_G * depth_arr[~positive_mask] * M_PER_KM / KBAR_TO_PA
+        )
+
+    if np.isscalar(depth_km):
+        return float(pressure_kbar)
+    return pressure_kbar
+
+
+def _build_ranked_thermobarometry_state(
+    cpx_only_workflows: Any,
+    cpx_liq_workflows: Any,
+    pressure_columns: Mapping[str, Sequence[str]],
+    temperature_columns: Mapping[str, Sequence[str]],
+    *,
+    pressure_model_pool: Optional[Sequence[Any]] = None,
+    temperature_model_pool: Optional[Sequence[Any]] = None,
+    liquid_results: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    cpx_only_bundle = _coerce_workflow_bundle(cpx_only_workflows, "cpx_only_workflows")
+    cpx_liq_bundle = _coerce_workflow_bundle(cpx_liq_workflows, "cpx_liq_workflows")
+    pressure_column_groups = _coerce_phase_column_groups(pressure_columns, "pressure_columns")
+    temperature_column_groups = _coerce_phase_column_groups(temperature_columns, "temperature_columns")
+
+    pressure_results = {
+        "2006": {
+            "cpx_only": _get_prediction_df_from_workflow(cpx_only_bundle.pressure_2006, "cpx_only_workflows.pressure_2006"),
+            "cpx_liq": _get_prediction_df_from_workflow(cpx_liq_bundle.pressure_2006, "cpx_liq_workflows.pressure_2006"),
+        },
+        "2010": {
+            "cpx_only": _get_prediction_df_from_workflow(cpx_only_bundle.pressure_2010, "cpx_only_workflows.pressure_2010"),
+            "cpx_liq": _get_prediction_df_from_workflow(cpx_liq_bundle.pressure_2010, "cpx_liq_workflows.pressure_2010"),
+        },
+    }
+    temperature_results = {
+        "2006": {
+            "cpx_only": _get_prediction_df_from_workflow(cpx_only_bundle.temperature_2006, "cpx_only_workflows.temperature_2006"),
+            "cpx_liq": _get_prediction_df_from_workflow(cpx_liq_bundle.temperature_2006, "cpx_liq_workflows.temperature_2006"),
+        },
+        "2010": {
+            "cpx_only": _get_prediction_df_from_workflow(cpx_only_bundle.temperature_2010, "cpx_only_workflows.temperature_2010"),
+            "cpx_liq": _get_prediction_df_from_workflow(cpx_liq_bundle.temperature_2010, "cpx_liq_workflows.temperature_2010"),
+        },
+    }
+
+    pressure_best_models = {
+        "2006": {
+            "cpx_only": _get_best_model_series_from_workflow(cpx_only_bundle.pressure_2006, "cpx_only_workflows.pressure_2006"),
+            "cpx_liq": _get_best_model_series_from_workflow(cpx_liq_bundle.pressure_2006, "cpx_liq_workflows.pressure_2006"),
+        },
+        "2010": {
+            "cpx_only": _get_best_model_series_from_workflow(cpx_only_bundle.pressure_2010, "cpx_only_workflows.pressure_2010"),
+            "cpx_liq": _get_best_model_series_from_workflow(cpx_liq_bundle.pressure_2010, "cpx_liq_workflows.pressure_2010"),
+        },
+    }
+    temperature_best_models = {
+        "2006": {
+            "cpx_only": _get_best_model_series_from_workflow(cpx_only_bundle.temperature_2006, "cpx_only_workflows.temperature_2006"),
+            "cpx_liq": _get_best_model_series_from_workflow(cpx_liq_bundle.temperature_2006, "cpx_liq_workflows.temperature_2006"),
+        },
+        "2010": {
+            "cpx_only": _get_best_model_series_from_workflow(cpx_only_bundle.temperature_2010, "cpx_only_workflows.temperature_2010"),
+            "cpx_liq": _get_best_model_series_from_workflow(cpx_liq_bundle.temperature_2010, "cpx_liq_workflows.temperature_2010"),
+        },
+    }
+
+    pressure_ranks = {
+        "2006": {
+            "cpx_only": _compute_rank_pcts_from_best(pressure_best_models["2006"]["cpx_only"]),
+            "cpx_liq": _compute_rank_pcts_from_best(pressure_best_models["2006"]["cpx_liq"]),
+        },
+        "2010": {
+            "cpx_only": _compute_rank_pcts_from_best(pressure_best_models["2010"]["cpx_only"]),
+            "cpx_liq": _compute_rank_pcts_from_best(pressure_best_models["2010"]["cpx_liq"]),
+        },
+    }
+    temperature_ranks = {
+        "2006": {
+            "cpx_only": _compute_rank_pcts_from_best(temperature_best_models["2006"]["cpx_only"]),
+            "cpx_liq": _compute_rank_pcts_from_best(temperature_best_models["2006"]["cpx_liq"]),
+        },
+        "2010": {
+            "cpx_only": _compute_rank_pcts_from_best(temperature_best_models["2010"]["cpx_only"]),
+            "cpx_liq": _compute_rank_pcts_from_best(temperature_best_models["2010"]["cpx_liq"]),
+        },
+    }
+
+    state = {
+        "P": {
+            "columns": pressure_column_groups,
+            "columns_all": pressure_column_groups["cpx_only"] + pressure_column_groups["cpx_liq"],
+            "split_idx": len(pressure_column_groups["cpx_only"]),
+            "results": pressure_results,
+            "best_models": pressure_best_models,
+            "ranks": pressure_ranks,
+            "uncertainty": _build_uncertainty_dict(pressure_model_pool),
+            "liquid_results": _coerce_liquid_kind_results("P", liquid_results),
+        },
+        "T": {
+            "columns": temperature_column_groups,
+            "columns_all": temperature_column_groups["cpx_only"] + temperature_column_groups["cpx_liq"],
+            "split_idx": len(temperature_column_groups["cpx_only"]),
+            "results": temperature_results,
+            "best_models": temperature_best_models,
+            "ranks": temperature_ranks,
+            "uncertainty": _build_uncertainty_dict(temperature_model_pool),
+            "liquid_results": _coerce_liquid_kind_results("T", liquid_results),
+        },
+    }
+
+    for kind in ("P", "T"):
+        kind_state = state[kind]
+        kind_state["data"] = {}
+        for year in ("2006", "2010"):
+            data_groups = []
+            for phase_type in ("cpx_only", "cpx_liq"):
+                df_label = f"{kind} results {year} {phase_type}"
+                df = kind_state["results"][year][phase_type]
+                cols = kind_state["columns"][phase_type]
+                data_groups.extend(_extract_plot_arrays(df, cols, df_label=df_label))
+            kind_state["data"][year] = _filter_data_groups(data_groups)
+
+    return state
+
+
+def _plot_ranked_this_study_kind_panel(
+    ax: plt.Axes,
+    kind: str,
+    state: Mapping[str, Any],
+    *,
+    selection_threshold: float,
+    pressure_ylim: Optional[tuple[float, float]] = None,
+    pressure_ticks: Optional[Sequence[float]] = None,
+    densities_kg_m3: Optional[Sequence[float]] = None,
+    layer_boundaries_km: Optional[Sequence[float]] = None,
+    depth_tick_step: float = 5,
+    depth_max: float = 37,
+    use_model_abbreviations: bool = False,
+    axis_label_fontsize: float = MANUSCRIPT_AXIS_LABEL_SIZE,
+    y_axis_label_fontsize: float = MANUSCRIPT_Y_AXIS_LABEL_SIZE,
+    tick_labelsize: float = MANUSCRIPT_TICK_LABEL_SIZE,
+    model_tick_labelsize: float = MANUSCRIPT_MODEL_TICK_LABEL_SIZE,
+    group_label_fontsize: float = MANUSCRIPT_GROUP_LABEL_SIZE,
+    annotation_fontsize: float = MANUSCRIPT_ANNOTATION_SIZE,
+) -> None:
+    kind_state = state[kind]
+    columns_all = kind_state["columns_all"]
+    split_idx = kind_state["split_idx"]
+    n_cols = len(columns_all)
+    positions = np.arange(1, n_cols + 1)
+    offset = 0.14
+    positions_06 = positions - offset
+    positions_10 = positions + offset
+
+    violin_width = 0.28
+    edge_lw_default = 1.2
+    edge_lw_selected = 3.0
+    uncertainty_band_width = violin_width * 0.72
+    color_06 = "blue"
+    color_10 = "red"
+    highlight_06 = "#20b8c5"
+    highlight_10 = "#f28e2b"
+
+    ax.minorticks_on()
+    ax.yaxis.set_minor_locator(AutoMinorLocator(2))
+    ax.tick_params(axis="y", which="minor", length=3, width=0.8)
+    ax.tick_params(axis="y", which="major", length=6, width=1.0, labelsize=tick_labelsize)
+    ax.grid(True, which="major", axis="y", linestyle="-", linewidth=0.8, color="0.85", zorder=0)
+    ax.grid(True, which="minor", axis="y", linestyle="-", linewidth=0.5, color="0.92", zorder=0)
+
+    ax.set_xticks(positions)
+    ax.set_xticklabels(
+        [
+            wrap_text(
+                _model_axis_label(col, kind, use_model_abbreviations=use_model_abbreviations),
+                max_width=12,
+            )
+            for col in columns_all
+        ],
+        rotation=0,
+        ha="center",
+        fontsize=model_tick_labelsize if use_model_abbreviations else tick_labelsize,
+    )
+    _apply_threshold_xtick_rotation(
+        ax,
+        [_model_axis_label(col, kind, use_model_abbreviations=use_model_abbreviations) for col in columns_all],
+    )
+    ax.xaxis.set_minor_locator(NullLocator())
+    ax.tick_params(axis="x", which="minor", bottom=False, top=False)
+    ax.tick_params(axis="x", which="major", labelsize=model_tick_labelsize if use_model_abbreviations else tick_labelsize)
+
+    ax.axvline(split_idx + 0.5, color="0.6", linewidth=1.0, zorder=1)
+    ax.text(split_idx / 2 + 0.5, 1.025, _display_phase_type_label("cpx_only"), transform=ax.get_xaxis_transform(), ha="center", va="bottom", fontsize=group_label_fontsize, fontweight="bold")
+    ax.text((split_idx + n_cols) / 2 + 0.5, 1.025, _display_phase_type_label("cpx_liq"), transform=ax.get_xaxis_transform(), ha="center", va="bottom", fontsize=group_label_fontsize, fontweight="bold")
+
+    vp06 = _draw_violin(
+        ax,
+        kind_state["data"]["2006"],
+        positions_06,
+        widths=violin_width,
+        facecolor=color_06,
+        edgecolor="k",
+        lw=edge_lw_default,
+        alpha=1.0,
+        bw_method=0.25,
+    )
+    vp10 = _draw_violin(
+        ax,
+        kind_state["data"]["2010"],
+        positions_10,
+        widths=violin_width,
+        facecolor=color_10,
+        edgecolor="k",
+        lw=edge_lw_default,
+        alpha=1.0,
+        bw_method=0.25,
+    )
+
+    def _selected_index_set(rank_pcts: Sequence[tuple[str, float]], phase_type: str, idx_shift: int) -> set[int]:
+        selected = set()
+        selected_ranks = _selected_rank_set_from_topk(rank_pcts, threshold=selection_threshold)
+        cols_local = kind_state["columns"][phase_type]
+        for rank_i, (model_name, _) in enumerate(rank_pcts):
+            if rank_i not in selected_ranks:
+                continue
+            idx_local = _model_to_index(cols_local, model_name)
+            if idx_local is not None:
+                selected.add(idx_shift + idx_local)
+        return selected
+
+    selected_06 = (
+        _selected_index_set(kind_state["ranks"]["2006"]["cpx_only"], "cpx_only", 0)
+        | _selected_index_set(kind_state["ranks"]["2006"]["cpx_liq"], "cpx_liq", split_idx)
+    )
+    selected_10 = (
+        _selected_index_set(kind_state["ranks"]["2010"]["cpx_only"], "cpx_only", 0)
+        | _selected_index_set(kind_state["ranks"]["2010"]["cpx_liq"], "cpx_liq", split_idx)
+    )
+
+    def _draw_all_uncertainty(positions_used: np.ndarray, data_all: Sequence[np.ndarray], band_color: str) -> None:
+        for idx, model_name in enumerate(columns_all):
+            _add_vertical_uncertainty_band(
+                ax,
+                positions_used[idx],
+                data_all[idx],
+                kind_state["uncertainty"].get(model_name),
+                uncertainty_band_width,
+                band_color,
+                alpha=1.0,
+                zorder=2.15,
+            )
+
+    def _annotate_all_pcts(
+        rank_pcts: Sequence[tuple[str, float]],
+        phase_type: str,
+        idx_shift: int,
+        positions_used: np.ndarray,
+        data_all: Sequence[np.ndarray],
+        selected_indices: set[int],
+        selected_color: str,
+    ) -> None:
+        rank_pct_map = {model_name: pct for model_name, pct in rank_pcts}
+        y_pad_frac = 0.06 if kind == "P" else 0.03
+        y_shift = -0.12 if kind == "P" else 0.0
+        for idx_local, model_name in enumerate(kind_state["columns"][phase_type]):
+            pct = rank_pct_map.get(model_name)
+            if pct is None:
+                continue
+            idx = idx_shift + idx_local
+            is_selected = idx in selected_indices
+            _annotate_above_data(
+                ax,
+                positions_used[idx],
+                data_all[idx],
+                f"{int(round(pct))}%",
+                selected_color if is_selected else "k",
+                y_pad_frac=y_pad_frac,
+                fontsize=annotation_fontsize + 1 if is_selected else annotation_fontsize,
+                y_shift=y_shift,
+            )
+
+    def _highlight_selected(
+        vp: Mapping[str, Any],
+        rank_pcts: Sequence[tuple[str, float]],
+        phase_type: str,
+        idx_shift: int,
+        positions_used: np.ndarray,
+        data_all: Sequence[np.ndarray],
+        bg_color: str,
+    ) -> None:
+        selected_ranks = _selected_rank_set_from_topk(rank_pcts, threshold=selection_threshold)
+        for rank_i, (model_name, _) in enumerate(rank_pcts):
+            if rank_i not in selected_ranks:
+                continue
+            idx_local = _model_to_index(kind_state["columns"][phase_type], model_name)
+            if idx_local is None:
+                continue
+            idx = idx_shift + idx_local
+            _add_subgroup_background(ax, positions_used[idx], violin_width, bg_color, alpha=0.18, zorder=1.5)
+            _style_selected_violin(vp, idx, edgecolor="k", lw=edge_lw_selected, linestyle="--")
+            _redraw_violin_median(ax, positions_used[idx], data_all[idx], violin_width, color="k", lw=2.0, zorder=4.8)
+
+    _draw_all_uncertainty(positions_06, kind_state["data"]["2006"], "lightgray")
+    _draw_all_uncertainty(positions_10, kind_state["data"]["2010"], "lightgray")
+
+    _annotate_all_pcts(
+        kind_state["ranks"]["2006"]["cpx_only"], "cpx_only", 0, positions_06, kind_state["data"]["2006"], selected_06, color_06
+    )
+    _annotate_all_pcts(
+        kind_state["ranks"]["2006"]["cpx_liq"], "cpx_liq", split_idx, positions_06, kind_state["data"]["2006"], selected_06, color_06
+    )
+    _annotate_all_pcts(
+        kind_state["ranks"]["2010"]["cpx_only"], "cpx_only", 0, positions_10, kind_state["data"]["2010"], selected_10, color_10
+    )
+    _annotate_all_pcts(
+        kind_state["ranks"]["2010"]["cpx_liq"], "cpx_liq", split_idx, positions_10, kind_state["data"]["2010"], selected_10, color_10
+    )
+
+    _highlight_selected(
+        vp06, kind_state["ranks"]["2006"]["cpx_only"], "cpx_only", 0, positions_06, kind_state["data"]["2006"], highlight_06
+    )
+    _highlight_selected(
+        vp06, kind_state["ranks"]["2006"]["cpx_liq"], "cpx_liq", split_idx, positions_06, kind_state["data"]["2006"], highlight_06
+    )
+    _highlight_selected(
+        vp10, kind_state["ranks"]["2010"]["cpx_only"], "cpx_only", 0, positions_10, kind_state["data"]["2010"], highlight_10
+    )
+    _highlight_selected(
+        vp10, kind_state["ranks"]["2010"]["cpx_liq"], "cpx_liq", split_idx, positions_10, kind_state["data"]["2010"], highlight_10
+    )
+
+    if kind == "P":
+        _apply_pressure_depth_axes(
+            ax,
+            pressure_ylim=pressure_ylim,
+            pressure_ticks=pressure_ticks,
+            depth_tick_step=depth_tick_step,
+            depth_max=depth_max,
+            densities_kg_m3=densities_kg_m3,
+            layer_boundaries_km=layer_boundaries_km,
+            label_fontsize=y_axis_label_fontsize,
+            tick_labelsize=tick_labelsize,
+        )
+    else:
+        ax.set_ylabel("Temperature (掳C)", fontsize=y_axis_label_fontsize)
+        ax.tick_params(axis="y", labelsize=tick_labelsize)
+    ax.xaxis.label.set_size(axis_label_fontsize)
+
+
+def _load_literature_table(data_or_path: Any, label: str) -> pd.DataFrame:
+    if isinstance(data_or_path, pd.DataFrame):
+        df = data_or_path.copy()
+    else:
+        df = pd.read_excel(Path(data_or_path))
+
+    if "plot" in df.columns:
+        plot_mask = df["plot"].fillna(False).astype(bool)
+        df = df.loc[plot_mask].reset_index(drop=True)
+    return df
+
+
+def _build_method_id(row: pd.Series) -> tuple[str, str, str, str, str]:
+    return (
+        _clean_str(row.get("category")),
+        _clean_str(row.get("type")),
+        _strip_parens(row.get("cite")),
+        _clean_str(row.get("models")),
+        _clean_str(row.get("thermobatometer")),
+    )
+
+
+def _make_lit_xtick_label(row: pd.Series) -> str:
+    cite = _strip_parens(row.get("cite"))
+    if cite:
+        abbreviated = _abbreviate_literature_cite(cite)
+        if abbreviated:
+            return abbreviated
+        return cite
+    thermobarometer = _clean_str(row.get("thermobatometer"))
+    if thermobarometer:
+        return thermobarometer
+    models = _clean_str(row.get("models"))
+    if models:
+        return models
+    return _clean_str(row.get("type")) or "unknown"
+
+
+def _abbreviate_literature_cite(cite: Any) -> str:
+    cite_clean = _clean_str(cite)
+    cite_lower = cite_clean.lower()
+    abbreviation_map = [
+        ("erdmann", "2016", "Erd16"),
+        ("aisyah", "2018", "Ais18"),
+        ("saepuloh", "2013", "Sae13"),
+        ("budi-santoso", "2013", "B-S13"),
+        ("budi santoso", "2013", "B-S13"),
+        ("widiyantoro", "2018", "Wid18"),
+        ("li", "2021", "Li21"),
+        ("preece", "2014", "Pre14"),
+        ("preece", "2016", "Pre16"),
+    ]
+    for author_token, year_token, label in abbreviation_map:
+        if author_token in cite_lower and year_token in cite_lower:
+            return label
+    return ""
+
+
+def _extract_numeric_ranges(
+    row: pd.Series,
+    keys: Sequence[tuple[str, str]],
+) -> list[tuple[float, float]]:
+    ranges = []
+    for key_min, key_max in keys:
+        value_min = row.get(key_min)
+        value_max = row.get(key_max)
+        if pd.isna(value_min) or pd.isna(value_max):
+            continue
+        try:
+            ranges.append((float(value_min), float(value_max)))
+        except Exception:
+            pass
+    return ranges
+
+
+def _pressure_range_keys() -> list[tuple[str, str]]:
+    return [
+        ("min kbar", "max kbar"),
+        ("min kbar2", "max kbar2"),
+        ("min kbar3", "max kbar3"),
+        ("min kbar (or equivalent)", "max kbar (or equivalent)"),
+        ("min kbar (or equivalent)2", "max kbar (or equivalent)2"),
+        ("min kbar (or equivalent)3", "max kbar (or equivalent)3"),
+    ]
+
+
+def _depth_range_keys() -> list[tuple[str, str]]:
+    return [
+        ("min km", "max km"),
+        ("min km2", "max km2"),
+        ("min km3", "max km3"),
+        ("min depth (km)", "max depth (km)"),
+        ("min depth (km)2", "max depth (km)2"),
+        ("min depth (km)3", "max depth (km)3"),
+    ]
+
+
+def _first_valid_row_value(row: pd.Series, keys: Sequence[str]) -> Any:
+    for key in keys:
+        value = row.get(key)
+        if value is None or pd.isna(value):
+            continue
+        return value
+    return np.nan
+
+
+def _coerce_literature_pressure_source(literature_pressure_source: str) -> str:
+    source = _clean_str(literature_pressure_source).lower()
+    if source not in {"pressure", "depth", "auto"}:
+        raise ValueError(
+            "literature_pressure_source must be 'pressure', 'depth', or 'auto'."
+        )
+    return source
+
+
+def _convert_depth_range_to_pressure_range(
+    depth_range: tuple[float, float],
+    *,
+    densities_kg_m3: Optional[Sequence[float]],
+    layer_boundaries_km: Optional[Sequence[float]],
+) -> tuple[float, float]:
+    pressures = np.asarray(
+        _depth_to_pressure_kbar(
+            [depth_range[0], depth_range[1]],
+            densities_kg_m3=densities_kg_m3,
+            layer_boundaries_km=layer_boundaries_km,
+        ),
+        dtype=float,
+    )
+    return float(np.nanmin(pressures)), float(np.nanmax(pressures))
+
+
+def _convert_depth_uncertainty_to_pressure(
+    depth_range: tuple[float, float],
+    uncertainty_depth_km: Any,
+    *,
+    densities_kg_m3: Optional[Sequence[float]],
+    layer_boundaries_km: Optional[Sequence[float]],
+) -> float:
+    if pd.isna(uncertainty_depth_km):
+        return np.nan
+    try:
+        uncertainty_depth_km = float(uncertainty_depth_km)
+    except Exception:
+        return np.nan
+    if uncertainty_depth_km < 0:
+        return np.nan
+    midpoint_depth_km = 0.5 * (float(depth_range[0]) + float(depth_range[1]))
+    lower_depth_km = max(0.0, midpoint_depth_km - uncertainty_depth_km)
+    upper_depth_km = midpoint_depth_km + uncertainty_depth_km
+    lower_pressure, upper_pressure = _convert_depth_range_to_pressure_range(
+        (lower_depth_km, upper_depth_km),
+        densities_kg_m3=densities_kg_m3,
+        layer_boundaries_km=layer_boundaries_km,
+    )
+    return 0.5 * abs(upper_pressure - lower_pressure)
+
+
+def _extract_ranges_pressure(
+    row: pd.Series,
+    *,
+    literature_pressure_source: str = "pressure",
+    densities_kg_m3: Optional[Sequence[float]] = None,
+    layer_boundaries_km: Optional[Sequence[float]] = None,
+) -> tuple[list[tuple[float, float]], list[float]]:
+    source = _coerce_literature_pressure_source(literature_pressure_source)
+
+    if source in {"pressure", "auto"}:
+        pressure_ranges = _extract_numeric_ranges(row, _pressure_range_keys())
+        if pressure_ranges or source == "pressure":
+            pressure_uncertainty = _first_valid_row_value(
+                row,
+                ("uncertainty kbar", "uncertainty"),
+            )
+            return pressure_ranges, [pressure_uncertainty] * len(pressure_ranges)
+
+    depth_ranges = _extract_numeric_ranges(row, _depth_range_keys())
+    depth_uncertainty = _first_valid_row_value(row, ("uncertainty km", "uncertainty"))
+    pressure_ranges = [
+        _convert_depth_range_to_pressure_range(
+            depth_range,
+            densities_kg_m3=densities_kg_m3,
+            layer_boundaries_km=layer_boundaries_km,
+        )
+        for depth_range in depth_ranges
+    ]
+    pressure_uncertainties = [
+        _convert_depth_uncertainty_to_pressure(
+            depth_range,
+            depth_uncertainty,
+            densities_kg_m3=densities_kg_m3,
+            layer_boundaries_km=layer_boundaries_km,
+        )
+        for depth_range in depth_ranges
+    ]
+    return pressure_ranges, pressure_uncertainties
+
+
+def _extract_ranges_temperature(row: pd.Series) -> list[tuple[float, float]]:
+    value_min = row.get("min")
+    value_max = row.get("max")
+    if pd.isna(value_min) or pd.isna(value_max):
+        return []
+    try:
+        return [(float(value_min), float(value_max))]
+    except Exception:
+        return []
+
+
+def _eruption_color(eruption: str) -> str:
+    eruption_lower = _clean_str(eruption).lower()
+    if "2006" in eruption_lower and "2010" in eruption_lower:
+        return "purple"
+    if "2006&2010" in eruption_lower or "2006 & 2010" in eruption_lower:
+        return "purple"
+    if "2006" in eruption_lower:
+        return "blue"
+    if "2010" in eruption_lower:
+        return "red"
+    return "0.2"
+
+
+def _eruption_slot_offset(eruption: str, delta: float = 0.16) -> float:
+    eruption_lower = _clean_str(eruption).lower()
+    if ("2006" in eruption_lower) and ("2010" in eruption_lower):
+        return 0.0
+    if "2006" in eruption_lower:
+        return -delta
+    if "2010" in eruption_lower:
+        return delta
+    return 0.0
+
+
+def _add_category_and_type_bands(
+    ax: plt.Axes,
+    methods: Sequence[Mapping[str, Any]],
+    x_positions: np.ndarray,
+    *,
+    category_fontsize: float = MANUSCRIPT_GROUP_LABEL_SIZE,
+    type_fontsize: float = MANUSCRIPT_ANNOTATION_SIZE,
+    category_y: float = 1.04,
+    type_y: float = 0.985,
+) -> None:
+    category_ranges = []
+    start = 0
+    for i in range(1, len(methods) + 1):
+        if i == len(methods) or methods[i]["category"] != methods[start]["category"]:
+            category_ranges.append((methods[start]["category"], start, i - 1))
+            start = i
+
+    for j, (category, i0, i1) in enumerate(category_ranges):
+        x0 = x_positions[i0] - 0.5
+        x1 = x_positions[i1] + 0.5
+        xc = 0.5 * (x0 + x1)
+        ax.text(
+            xc,
+            category_y,
+            _wrap_label(category, width=14, allow_word_break=True),
+            transform=ax.get_xaxis_transform(),
+            ha="center",
+            va="bottom",
+            fontsize=category_fontsize,
+            fontweight="bold",
+        )
+        if j < len(category_ranges) - 1:
+            ax.axvline(x1, color="0.35", lw=2.0, zorder=1.4)
+
+    blocks = []
+    start = 0
+    for i in range(1, len(methods) + 1):
+        current_type_label = _display_phase_type_label(methods[start].get("type"))
+        next_type_label = None if i == len(methods) else _display_phase_type_label(methods[i].get("type"))
+        if i == len(methods) or methods[i]["category"] != methods[start]["category"] or next_type_label != current_type_label:
+            blocks.append((methods[start]["category"], current_type_label, start, i - 1))
+            start = i
+
+    for _, method_type, i0, i1 in blocks:
+        x0 = x_positions[i0] - 0.5
+        x1 = x_positions[i1] + 0.5
+        ax.axvspan(x0, x1, color="white", alpha=1.0, zorder=0)
+        xc = 0.5 * (x0 + x1)
+        ax.text(
+            xc,
+            type_y,
+            _wrap_label(method_type, width=14, allow_word_break=True),
+            transform=ax.get_xaxis_transform(),
+            ha="center",
+            va="top",
+            fontsize=type_fontsize,
+            color="0.20",
+        )
+        ax.axvline(x0, color="0.75", lw=1.0, zorder=1)
+        ax.axvline(x1, color="0.75", lw=1.0, zorder=1)
+
+
+def _add_pressure_reservoir_bands(
+    ax: plt.Axes,
+    reservoir_bands: Sequence[Mapping[str, Any]],
+    *,
+    densities_kg_m3: Optional[Sequence[float]] = None,
+    layer_boundaries_km: Optional[Sequence[float]] = None,
+    label_fontsize: float = MANUSCRIPT_RESERVOIR_LABEL_SIZE,
+    label_x: Optional[float] = None,
+) -> None:
+    if label_x is None:
+        transform = blended_transform_factory(ax.transAxes, ax.transData)
+        x_text = 0.985
+        ha = "left"
+        clip_on = True
+    else:
+        transform = ax.transData
+        x_text = float(label_x)
+        ha = "right"
+        clip_on = True
+
+    for band in reservoir_bands:
+        min_depth = band.get("min_depth_km", band.get("min km"))
+        max_depth = band.get("max_depth_km", band.get("max km"))
+        if min_depth is None or max_depth is None:
+            continue
+        p0, p1 = _convert_depth_range_to_pressure_range(
+            (float(min_depth), float(max_depth)),
+            densities_kg_m3=densities_kg_m3,
+            layer_boundaries_km=layer_boundaries_km,
+        )
+        y0, y1 = sorted((p0, p1))
+        label = _clean_str(band.get("label"))
+        if label:
+            ax.text(
+                x_text,
+                0.5 * (y0 + y1),
+                label,
+                transform=transform,
+                ha=ha,
+                va="center",
+                fontsize=label_fontsize,
+                fontweight="bold",
+                color=band.get("text_color", "0.20"),
+                zorder=1.6,
+                clip_on=clip_on,
+            )
+
+
+def _group_literature_methods(
+    df: pd.DataFrame,
+    *,
+    kind: str,
+    literature_pressure_source: str = "pressure",
+    densities_kg_m3: Optional[Sequence[float]] = None,
+    layer_boundaries_km: Optional[Sequence[float]] = None,
+) -> list[dict[str, Any]]:
+    groups: defaultdict[tuple[str, str, str, str, str], list[pd.Series]] = defaultdict(list)
+    for _, row in df.iterrows():
+        groups[_build_method_id(row)].append(row)
+
+    methods = []
+    for rows in groups.values():
+        representative = rows[0]
+        eruptions = []
+        for row in rows:
+            if kind == "P":
+                ranges, range_uncertainties = _extract_ranges_pressure(
+                    row,
+                    literature_pressure_source=literature_pressure_source,
+                    densities_kg_m3=densities_kg_m3,
+                    layer_boundaries_km=layer_boundaries_km,
+                )
+            else:
+                ranges = _extract_ranges_temperature(row)
+                range_uncertainties = [row.get("uncertainty", np.nan)] * len(ranges)
+            if len(ranges) == 0:
+                continue
+            eruptions.append(
+                {
+                    "eruption": _clean_str(row.get("eruption(s)")),
+                    "ranges": ranges,
+                    "uncertainty": _first_valid_row_value(
+                        row,
+                        ("uncertainty", "uncertainty kbar", "uncertainty km"),
+                    ),
+                    "range_uncertainties": range_uncertainties,
+                    "notes": _clean_str(row.get("notes")),
+                }
+            )
+        if len(eruptions) == 0:
+            continue
+        methods.append(
+            {
+                "category": _clean_str(representative.get("category")),
+                "type": _clean_str(representative.get("type")),
+                "label": _make_lit_xtick_label(representative),
+                "thermobatometer": _clean_str(representative.get("thermobatometer")),
+                "eruptions": eruptions,
+            }
+        )
+
+    category_order = {
+        "Volatile saturation": 0,
+        "Experiments": 1,
+        "Geophysics": 2,
+    }
+    methods.sort(
+        key=lambda method: (
+            category_order.get(method["category"], 999),
+            method["type"],
+            method["label"],
+        )
+    )
+    return methods
+
+
+def _selected_predictions_from_best_models(df_pred: pd.DataFrame, best_model_series: pd.Series) -> np.ndarray:
+    values = []
+    common_index = best_model_series.index.intersection(df_pred.index)
+    for row_id in common_index:
+        model_name = best_model_series.loc[row_id]
+        if pd.isna(model_name):
+            continue
+        model_name = str(model_name)
+        if model_name not in df_pred.columns:
+            continue
+        value = df_pred.at[row_id, model_name]
+        if pd.notna(value) and np.isfinite(float(value)):
+            values.append(float(value))
+    return np.asarray(values, dtype=float)
+
+
+def _build_this_study_columns_for_comparison(
+    kind: str,
+    state: Mapping[str, Any],
+    *,
+    selection_threshold: float,
+    use_model_abbreviations: bool = False,
+) -> list[dict[str, Any]]:
+    kind_state = state[kind]
+    columns = []
+
+    for phase_type in ("cpx_only", "cpx_liq"):
+        for year in ("2006", "2010"):
+            rank_pcts = kind_state["ranks"][year][phase_type]
+            df_pred = kind_state["results"][year][phase_type]
+            overall_data = _selected_predictions_from_best_models(
+                df_pred,
+                kind_state["best_models"][year][phase_type],
+            )
+            overall_data = _remove_boxplot_outliers(overall_data)
+            models_to_plot = _pick_models_for_single_eruption(rank_pcts, threshold=selection_threshold)
+            rank_pct_map = {model_name: pct for model_name, pct in rank_pcts}
+
+            for rank_i, model_name in enumerate(models_to_plot):
+                if model_name not in df_pred.columns:
+                    raise KeyError(f"{kind} results {year} {phase_type} are missing column {model_name!r}.")
+                columns.append(
+                    {
+                        "category": "This study",
+                        "type": phase_type,
+                        "eruption": year,
+                        "model": model_name,
+                        "label": _model_axis_label(
+                            model_name,
+                            kind,
+                            use_model_abbreviations=use_model_abbreviations,
+                        ),
+                        "data": _remove_boxplot_outliers(df_pred[model_name].dropna().to_numpy()),
+                        "overall_data": overall_data,
+                        "rank_i": rank_i,
+                        "pct": rank_pct_map.get(model_name),
+                        "fill": "blue" if year == "2006" else "red",
+                        "uncertainty": kind_state["uncertainty"].get(model_name, np.nan),
+                    }
+                )
+
+    liquid_results = kind_state.get("liquid_results", {})
+    if liquid_results:
+        liquid_subcolumns = []
+        liquid_colors = {"2006": "blue", "2010": "red"}
+        for year in ("2006", "2010"):
+            year_results = liquid_results.get(year, {})
+            for phase_name in ("glass", "bulk"):
+                if phase_name not in year_results:
+                    continue
+                liquid_subcolumns.append(
+                    {
+                        "eruption": year,
+                        "phase_name": phase_name,
+                        "data": year_results[phase_name],
+                        "fill": liquid_colors[year],
+                        "uncertainty": _liquid_prediction_uncertainty(kind, phase_name),
+                    }
+                )
+
+        if liquid_subcolumns:
+            columns.append(
+                {
+                    "category": "This study",
+                    "type": "liquid",
+                    "label": "Weber & Blundy, 2024",
+                    "subcolumns": liquid_subcolumns,
+                }
+            )
+
+    return columns
+
+
+def _plot_this_study_boxes_on_comparison(
+    ax: plt.Axes,
+    this_cols: Sequence[Mapping[str, Any]],
+    *,
+    kind: str,
+    annotation_fontsize: float = MANUSCRIPT_ANNOTATION_SIZE,
+    annotate_rmse: bool = True,
+) -> Optional[Mapping[str, Any]]:
+    if len(this_cols) == 0:
+        return None
+
+    x_centers = np.arange(1, len(this_cols) + 1)
+    last_bp: Optional[Mapping[str, Any]] = None
+
+    for i, col in enumerate(this_cols):
+        x_center = x_centers[i]
+
+        if "subcolumns" in col:
+            subcolumns = list(col["subcolumns"])
+            eruption_positions = {"2006": x_center - 0.10, "2010": x_center + 0.10}
+            sub_positions = np.array([eruption_positions.get(subcol["eruption"], x_center) for subcol in subcolumns], dtype=float)
+            last_bp = ax.boxplot(
+                [subcol["data"] for subcol in subcolumns],
+                positions=sub_positions,
+                widths=0.20,
+                showfliers=False,
+                patch_artist=True,
+            )
+
+            phase_data: dict[str, list[np.ndarray]] = defaultdict(list)
+            phase_positions: dict[str, list[float]] = defaultdict(list)
+            for j, subcol in enumerate(subcolumns):
+                _style_bp_item(last_bp, j, facecolor=subcol["fill"], edgecolor="k", lw=1.1, alpha=1.0)
+                phase_data[subcol["phase_name"]].append(np.asarray(subcol["data"], dtype=float))
+                phase_positions[subcol["phase_name"]].append(float(sub_positions[j]))
+
+            y_min, y_max = ax.get_ylim()
+            y_pad = max((y_max - y_min) * 0.03, 0.15 if kind == "P" else 3.0)
+            for phase_name, phase_label in (("glass", "glass"), ("bulk", "bulk rock")):
+                values = phase_data.get(phase_name, [])
+                if not values:
+                    continue
+                phase_concat = np.concatenate(values)
+                phase_concat = phase_concat[np.isfinite(phase_concat)]
+                if phase_concat.size == 0:
+                    continue
+                label_x = float(np.mean(phase_positions.get(phase_name, [x_center])))
+                if kind == "P":
+                    label_y = float(np.nanmin(phase_concat) - y_pad)
+                else:
+                    label_y = float(np.nanmax(phase_concat) + y_pad)
+                _annotate_grouped_box_label(ax, label_x, label_y, phase_label, fontsize=annotation_fontsize, color="0.15")
+            continue
+
+        _draw_overall_selected_violin(ax, x_center, col.get("overall_data", []), facecolor=col["fill"])
+        last_bp = ax.boxplot([col["data"]], positions=[x_center], widths=0.20, showfliers=False, patch_artist=True)
+        _style_bp_item(last_bp, 0, facecolor=col["fill"], edgecolor="k", lw=1.2, alpha=1.0)
+        if annotate_rmse:
+            _annotate_rmse_below_zero(ax, x_center, col.get("uncertainty"), kind=kind, fontsize=annotation_fontsize)
+        pct = col.get("pct")
+        if pct is not None:
+            y_pad_frac = 0.06 if kind == "P" else 0.03
+            _annotate_above_boxplot_whisker(
+                ax,
+                x_center,
+                col["data"],
+                f"{int(round(pct))}%",
+                col["fill"],
+                y_pad_frac=y_pad_frac,
+                fontsize=annotation_fontsize,
+            )
+
+    return last_bp
+
+
+def _build_methods_for_bands(this_cols: Sequence[Mapping[str, Any]], lit_methods: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    this_for_bands = [{"category": col["category"], "type": col["type"], "label": col["label"]} for col in this_cols]
+    lit_for_bands = [{"category": method["category"], "type": method["type"], "label": method["label"]} for method in lit_methods]
+    return this_for_bands + lit_for_bands
+
+
+def _draw_overall_selected_violin(
+    ax: plt.Axes,
+    x_center: float,
+    values: Any,
+    *,
+    facecolor: str,
+) -> None:
+    clean_values = np.asarray(values, dtype=float)
+    clean_values = clean_values[np.isfinite(clean_values)]
+    if clean_values.size < 3 or np.nanstd(clean_values) <= 0:
+        return
+    vp = _draw_violin(
+        ax,
+        [clean_values],
+        [x_center],
+        widths=0.46,
+        facecolor=facecolor,
+        edgecolor=facecolor,
+        lw=0.0,
+        alpha=0.18,
+        bw_method=0.25,
+        zorder=1.6,
+    )
+    if "cmedians" in vp:
+        vp["cmedians"].set_alpha(0.0)
+
+
+def _annotate_rmse_below_zero(
+    ax: plt.Axes,
+    x_center: float,
+    uncertainty: Any,
+    *,
+    kind: str,
+    fontsize: float,
+) -> None:
+    finite_uncertainty = _finite_uncertainty(uncertainty)
+    if kind != "P" or finite_uncertainty is None:
+        return
+    ax.text(
+        x_center,
+        0.25,
+        f"RMSE =\n{finite_uncertainty:.1f} kbar",
+        ha="center",
+        va="top",
+        fontsize=fontsize,
+        color="0.15",
+        zorder=5,
+        clip_on=False,
+    )
+
+
+def _is_melts_modeling_method(method: Mapping[str, Any], kind: str) -> bool:
+    return (
+        kind == "T"
+        and _clean_str(method.get("category")).lower() == "modeling"
+        and _clean_str(method.get("type")).upper() == "MELTS"
+    )
+
+
+def _format_melts_note(note: Any) -> str:
+    note_clean = _clean_str(note)
+    if "4 wt." in note_clean:
+        return "3 kbar and\n4 wt.% H2O"
+    if "6 wt." in note_clean:
+        return "3 kbar and\n6 wt.% H2O"
+    return _wrap_label(note_clean, width=14)
+
+
+def _draw_melts_modeling_column(
+    ax: plt.Axes,
+    xi: float,
+    eruptions: Sequence[Mapping[str, Any]],
+    *,
+    text_fontsize: float = MANUSCRIPT_ANNOTATION_SIZE,
+) -> None:
+    melts_points = []
+    for eruption_item in eruptions:
+        for range_min, range_max in eruption_item["ranges"]:
+            melts_points.append(
+                {
+                    "y": 0.5 * (float(range_min) + float(range_max)),
+                    "label": _format_melts_note(eruption_item.get("notes", "")),
+                }
+            )
+
+    if len(melts_points) == 0:
+        return
+
+    melts_points = sorted(melts_points, key=lambda item: item["y"], reverse=True)
+    melts_color = "#8a0f9c"
+    cap_half_width = 0.13
+    reference_arrow_length = None
+
+    for idx, point in enumerate(melts_points):
+        y = point["y"]
+        ax.text(xi, y, point["label"], fontsize=text_fontsize, color="0.10", ha="center", va="center", zorder=4, clip_on=True)
+
+        arrow_start = y - 7.0
+        if idx < len(melts_points) - 1:
+            arrow_end = melts_points[idx + 1]["y"] + 7.0
+            reference_arrow_length = arrow_start - arrow_end
+        else:
+            arrow_length = reference_arrow_length if reference_arrow_length is not None else 16.0
+            arrow_end = arrow_start - arrow_length
+
+        ax.hlines(arrow_start, xi - cap_half_width, xi + cap_half_width, color=melts_color, lw=2.3, zorder=4)
+        ax.annotate(
+            "",
+            xy=(xi, arrow_end),
+            xytext=(xi, arrow_start),
+            arrowprops=dict(arrowstyle="-|>", color=melts_color, lw=2.3),
+            zorder=4,
+        )
+
+
+def _plot_ranked_literature_panel(
+    ax: plt.Axes,
+    kind: str,
+    state: Mapping[str, Any],
+    literature_df: pd.DataFrame,
+    *,
+    selection_threshold: float,
+    add_literature_legend: bool,
+    pressure_ylim: Optional[tuple[float, float]] = None,
+    temperature_ylim: Optional[tuple[float, float]] = None,
+    pressure_ticks: Optional[Sequence[float]] = None,
+    densities_kg_m3: Optional[Sequence[float]] = None,
+    layer_boundaries_km: Optional[Sequence[float]] = None,
+    literature_pressure_source: str = "pressure",
+    depth_tick_step: float = 5,
+    depth_max: float = 37,
+    use_model_abbreviations: bool = False,
+    pressure_reservoir_bands: Optional[Sequence[Mapping[str, Any]]] = None,
+    axis_label_fontsize: float = MANUSCRIPT_AXIS_LABEL_SIZE,
+    y_axis_label_fontsize: float = MANUSCRIPT_Y_AXIS_LABEL_SIZE,
+    tick_labelsize: float = MANUSCRIPT_TICK_LABEL_SIZE,
+    model_tick_labelsize: float = MANUSCRIPT_MODEL_TICK_LABEL_SIZE,
+    group_label_fontsize: float = MANUSCRIPT_GROUP_LABEL_SIZE,
+    legend_fontsize: float = MANUSCRIPT_LEGEND_SIZE,
+    annotation_fontsize: float = MANUSCRIPT_ANNOTATION_SIZE,
+    reservoir_label_fontsize: float = MANUSCRIPT_RESERVOIR_LABEL_SIZE,
+    split_literature_legend: bool = False,
+    this_study_legend_bbox_to_anchor: tuple[float, float] = (0.005, 0.02),
+    literature_legend_bbox_to_anchor: tuple[float, float] = (0.58, 0.50),
+    reservoir_label_x_offset: float = 0.95,
+    reservoir_label_right_margin: float = 0.10,
+) -> None:
+    this_cols = _build_this_study_columns_for_comparison(
+        kind,
+        state,
+        selection_threshold=selection_threshold,
+        use_model_abbreviations=use_model_abbreviations,
+    )
+    lit_methods = _group_literature_methods(
+        literature_df,
+        kind=kind,
+        literature_pressure_source=literature_pressure_source,
+        densities_kg_m3=densities_kg_m3,
+        layer_boundaries_km=layer_boundaries_km,
+    )
+
+    methods_all = _build_methods_for_bands(this_cols, lit_methods)
+    x_all = np.arange(1, len(methods_all) + 1)
+    reservoir_label_x = None
+    if kind == "P" and pressure_reservoir_bands:
+        reservoir_label_x = len(methods_all) + reservoir_label_x_offset
+    _add_category_and_type_bands(
+        ax,
+        methods_all,
+        x_all,
+        category_fontsize=group_label_fontsize,
+        type_fontsize=annotation_fontsize,
+    )
+    if kind == "P" and pressure_reservoir_bands:
+        _add_pressure_reservoir_bands(
+            ax,
+            pressure_reservoir_bands,
+            densities_kg_m3=densities_kg_m3,
+            layer_boundaries_km=layer_boundaries_km,
+            label_fontsize=reservoir_label_fontsize,
+            label_x=reservoir_label_x,
+        )
+
+    n_this = len(this_cols)
+    if n_this > 0:
+        _plot_this_study_boxes_on_comparison(
+            ax,
+            this_cols,
+            kind=kind,
+            annotation_fontsize=annotation_fontsize,
+        )
+
+    if len(lit_methods) > 0:
+        x_lit = np.arange(1, len(lit_methods) + 1) + n_this
+        for i, method in enumerate(lit_methods):
+            xi = x_lit[i]
+            thermobarometer_text = _clean_str(method.get("thermobatometer"))
+
+            if _is_melts_modeling_method(method, kind):
+                _draw_melts_modeling_column(ax, xi, method["eruptions"], text_fontsize=annotation_fontsize)
+                continue
+
+            for eruption_item in method["eruptions"]:
+                color = _eruption_color(eruption_item["eruption"])
+                dx = _eruption_slot_offset(eruption_item["eruption"], delta=0.16)
+                ranges = eruption_item["ranges"]
+                offsets_local = np.linspace(-0.06, 0.06, max(1, len(ranges)))
+
+                for k, (range_min, range_max) in enumerate(ranges):
+                    xk = xi + dx + offsets_local[k]
+                    if np.isclose(float(range_min), float(range_max), equal_nan=False):
+                        ax.plot(
+                            xk,
+                            range_min,
+                            marker="o",
+                            markersize=6.5,
+                            color=color,
+                            markeredgecolor=color,
+                            linestyle="None",
+                            zorder=3,
+                        )
+                    else:
+                        ax.vlines(xk, range_min, range_max, color=color, lw=4.0, zorder=3)
+                        ax.hlines([range_min, range_max], xk - 0.07, xk + 0.07, color=color, lw=2.4, zorder=3)
+
+                    if _clean_str(method["category"]).lower() == "geothermobarometry" and thermobarometer_text:
+                        if kind == "P":
+                            y_top = min(range_min, range_max)
+                            y_text = y_top - 0.25
+                        else:
+                            y_top = max(range_min, range_max)
+                            y_text = y_top + 15.0
+                        ax.text(
+                            xk,
+                            y_text,
+                            _wrap_label(thermobarometer_text, width=14),
+                            fontsize=annotation_fontsize,
+                            color="0.20",
+                            ha="center",
+                            va="bottom",
+                            zorder=4,
+                            clip_on=True,
+                        )
+
+    x_right = (
+        reservoir_label_x + reservoir_label_right_margin
+        if reservoir_label_x is not None
+        else len(methods_all) + 0.5
+    )
+    ax.set_xlim(0.5, x_right)
+    ax.set_xticks(x_all)
+    raw_xtick_labels = [method["label"] for method in methods_all]
+    xtick_labels = [_wrap_label(label, width=12) for label in raw_xtick_labels]
+    ax.set_xticklabels(
+        xtick_labels,
+        rotation=0,
+        ha="center",
+        fontsize=model_tick_labelsize if use_model_abbreviations else tick_labelsize,
+    )
+    ax.xaxis.set_minor_locator(NullLocator())
+    ax.tick_params(axis="x", which="minor", bottom=False, top=False)
+    ax.tick_params(axis="x", which="major", labelsize=model_tick_labelsize if use_model_abbreviations else tick_labelsize)
+    _apply_threshold_xtick_rotation(ax, raw_xtick_labels)
+
+    ax.minorticks_on()
+    ax.yaxis.set_minor_locator(AutoMinorLocator(2))
+    ax.grid(True, which="major", axis="y", linestyle="-", linewidth=0.8, color="0.85", zorder=0)
+    ax.grid(True, which="minor", axis="y", linestyle="-", linewidth=0.5, color="0.92", zorder=0)
+
+    if kind == "P":
+        _apply_pressure_depth_axes(
+            ax,
+            pressure_ylim=pressure_ylim,
+            pressure_ticks=pressure_ticks,
+            depth_tick_step=depth_tick_step,
+            depth_max=depth_max,
+            densities_kg_m3=densities_kg_m3,
+            layer_boundaries_km=layer_boundaries_km,
+            label_fontsize=y_axis_label_fontsize,
+            tick_labelsize=tick_labelsize,
+        )
+    else:
+        ax.set_ylabel("Temperature (掳C)", fontsize=y_axis_label_fontsize)
+        if temperature_ylim is not None:
+            ax.set_ylim(*temperature_ylim)
+        ax.tick_params(axis="y", labelsize=tick_labelsize)
+    ax.xaxis.label.set_size(axis_label_fontsize)
+
+    if add_literature_legend:
+        this_study_handles = [
+            Patch(facecolor="blue", edgecolor="k", alpha=1.0, label="2006 (this study)"),
+            Patch(facecolor="red", edgecolor="k", alpha=1.0, label="2010 (this study)"),
+        ]
+        literature_handles = [
+            Line2D([0], [0], color="purple", lw=4.0, label="2006&2010 (literature)"),
+            Line2D([0], [0], color="blue", lw=4.0, label="2006 (literature)"),
+            Line2D([0], [0], color="red", lw=4.0, label="2010 (literature)"),
+        ]
+        if split_literature_legend:
+            this_legend = ax.legend(
+                handles=this_study_handles,
+                loc="lower left",
+                bbox_to_anchor=this_study_legend_bbox_to_anchor,
+                frameon=True,
+                ncol=1,
+                fontsize=legend_fontsize,
+                borderpad=0.35,
+                handlelength=1.6,
+                handletextpad=0.5,
+            )
+            ax.add_artist(this_legend)
+            ax.legend(
+                handles=literature_handles,
+                loc="center",
+                bbox_to_anchor=literature_legend_bbox_to_anchor,
+                frameon=True,
+                ncol=1,
+                fontsize=legend_fontsize,
+                borderpad=0.35,
+                handlelength=1.6,
+                handletextpad=0.5,
+            )
+        else:
+            ax.legend(
+                handles=[*this_study_handles, *literature_handles],
+                loc="lower left",
+                bbox_to_anchor=this_study_legend_bbox_to_anchor,
+                frameon=True,
+                ncol=3,
+                fontsize=legend_fontsize,
+                borderpad=0.35,
+                handlelength=1.6,
+                handletextpad=0.5,
+            )
+
+
+def _build_original_vs_hps_columns_for_comparison(
+    kind: str,
+    original_state: Mapping[str, Any],
+    hps_state: Mapping[str, Any],
+    *,
+    selection_threshold: float,
+    use_model_abbreviations: bool,
+) -> list[dict[str, Any]]:
+    columns: list[dict[str, Any]] = []
+    for category_label, state in (("Original", original_state), ("+HPS", hps_state)):
+        state_columns = _build_this_study_columns_for_comparison(
+            kind,
+            state,
+            selection_threshold=selection_threshold,
+            use_model_abbreviations=use_model_abbreviations,
+        )
+        for col in state_columns:
+            if "subcolumns" in col:
+                continue
+            col_copy = dict(col)
+            col_copy["category"] = category_label
+            columns.append(col_copy)
+    return columns
+
+
+def _plot_original_vs_hps_kind_panel(
+    ax: plt.Axes,
+    kind: str,
+    original_state: Mapping[str, Any],
+    hps_state: Mapping[str, Any],
+    *,
+    selection_threshold: float,
+    pressure_ylim: Optional[tuple[float, float]],
+    temperature_ylim: Optional[tuple[float, float]],
+    use_model_abbreviations: bool,
+    tick_labelsize: float = MANUSCRIPT_THIS_STUDY_TICK_LABEL_SIZE,
+    annotation_fontsize: float = MANUSCRIPT_THIS_STUDY_ANNOTATION_SIZE,
+    y_axis_label_fontsize: float = MANUSCRIPT_THIS_STUDY_Y_AXIS_LABEL_SIZE,
+) -> None:
+    columns = _build_original_vs_hps_columns_for_comparison(
+        kind,
+        original_state,
+        hps_state,
+        selection_threshold=selection_threshold,
+        use_model_abbreviations=use_model_abbreviations,
+    )
+    x_centers = np.arange(1, len(columns) + 1, dtype=float)
+    all_values = [
+        np.asarray(values, dtype=float)
+        for col in columns
+        for values in (col.get("data", []), col.get("overall_data", []))
+        if np.asarray(values, dtype=float).size > 0
+    ]
+
+    ax.minorticks_on()
+    ax.yaxis.set_minor_locator(AutoMinorLocator(2))
+    ax.tick_params(axis="y", which="minor", length=3, width=0.8)
+    ax.tick_params(axis="y", which="major", length=6, width=1.0, labelsize=tick_labelsize)
+    ax.grid(True, which="major", axis="y", linestyle="-", linewidth=0.8, color="0.85", zorder=0)
+    ax.grid(True, which="minor", axis="y", linestyle="-", linewidth=0.5, color="0.92", zorder=0)
+
+    if columns:
+        _add_category_and_type_bands(
+            ax,
+            [{"category": col["category"], "type": col["type"], "label": col["label"]} for col in columns],
+            x_centers,
+            category_fontsize=MANUSCRIPT_GROUP_LABEL_SIZE,
+            type_fontsize=annotation_fontsize,
+        )
+        _plot_this_study_boxes_on_comparison(
+            ax,
+            columns,
+            kind=kind,
+            annotation_fontsize=annotation_fontsize,
+            annotate_rmse=False,
+        )
+
+    raw_xtick_labels = [col["label"] for col in columns]
+    ax.set_xticks(x_centers)
+    ax.set_xticklabels(
+        [_wrap_label(label, width=12) for label in raw_xtick_labels],
+        rotation=0,
+        ha="center",
+        fontsize=tick_labelsize,
+    )
+    ax.tick_params(axis="x", which="major", labelsize=tick_labelsize)
+    ax.xaxis.set_minor_locator(NullLocator())
+    ax.tick_params(axis="x", which="minor", bottom=False, top=False)
+    _apply_threshold_xtick_rotation(ax, raw_xtick_labels)
+    ax.set_xlim(0.5, len(columns) + 0.5)
+
+    if kind == "P":
+        ax.set_ylabel("Pressure (kbar)", fontsize=y_axis_label_fontsize)
+        if pressure_ylim is not None:
+            ax.set_ylim(*pressure_ylim)
+        # reverse y-axis to have pressure increase downwards
+        ax.invert_yaxis()
+    else:
+        ax.set_ylabel("Temperature (°C)", fontsize=y_axis_label_fontsize)
+        if temperature_ylim is not None:
+            ax.set_ylim(*temperature_ylim)
+
+    if kind == "T" and temperature_ylim is None and all_values:
+        finite_values = np.concatenate(all_values)
+        finite_values = finite_values[np.isfinite(finite_values)]
+        if finite_values.size > 0:
+            y_min = float(np.nanmin(finite_values))
+            y_max = float(np.nanmax(finite_values))
+            y_pad = max((y_max - y_min) * 0.18, 20.0)
+            ax.set_ylim(y_min - y_pad * 0.25, y_max + y_pad)
+
+
+def _apply_this_study_axis_font_sizes(
+    fig: plt.Figure,
+    *,
+    labelsize: float = MANUSCRIPT_THIS_STUDY_AXIS_LABEL_SIZE,
+    y_labelsize: float = MANUSCRIPT_THIS_STUDY_Y_AXIS_LABEL_SIZE,
+    tick_labelsize: float = MANUSCRIPT_THIS_STUDY_TICK_LABEL_SIZE,
+    model_tick_labelsize: float = MANUSCRIPT_THIS_STUDY_MODEL_TICK_LABEL_SIZE,
+    legend_fontsize: float = MANUSCRIPT_THIS_STUDY_LEGEND_SIZE,
+) -> None:
+    for ax in fig.axes:
+        ax.xaxis.label.set_size(labelsize)
+        ax.yaxis.label.set_size(y_labelsize)
+        ax.tick_params(axis="both", labelsize=tick_labelsize)
+        ax.tick_params(axis="x", labelsize=model_tick_labelsize)
+        legend = ax.get_legend()
+        if legend is not None:
+            for text in legend.get_texts():
+                text.set_fontsize(legend_fontsize)
+
+
+def _add_panel_label(
+    ax: plt.Axes,
+    label: str,
+    *,
+    x: float = -0.06,
+    y: float = 1.045,
+    fontsize: float = MANUSCRIPT_PANEL_LABEL_SIZE,
+) -> None:
+    ax.text(
+        x,
+        y,
+        label,
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=fontsize,
+        fontweight="bold",
+        bbox=dict(boxstyle="round,pad=0.15", facecolor="white", edgecolor="none", alpha=0.8),
+        zorder=10,
+        clip_on=False,
+    )
+
+
+def plot_ranked_thermobarometry_this_study(
+    cpx_only_workflows: Any,
+    cpx_liq_workflows: Any,
+    pressure_columns: Mapping[str, Sequence[str]],
+    temperature_columns: Mapping[str, Sequence[str]],
+    *,
+    pressure_model_pool: Optional[Sequence[Any]] = None,
+    temperature_model_pool: Optional[Sequence[Any]] = None,
+    selection_threshold: float = 50.0,
+    pressure_ylim: Optional[tuple[float, float]] = None,
+    pressure_ticks: Optional[Sequence[float]] = None,
+    densities_kg_m3: Optional[Sequence[float]] = None,
+    layer_boundaries_km: Optional[Sequence[float]] = None,
+    depth_tick_step: float = 5,
+    depth_max: float = 37,
+    figsize: tuple[float, float] = (20.5, 16),
+    constrained_layout: bool = True,
+    subplot_hspace: Optional[float] = 0.08,
+    add_legend: bool = True,
+    panel_labels: tuple[str, str] = ("(a)", "(b)"),
+    save_path: Optional[str | Path] = None,
+    use_model_abbreviations: bool = False,
+    tick_labelsize: float = MANUSCRIPT_THIS_STUDY_TICK_LABEL_SIZE,
+    model_tick_labelsize: float = MANUSCRIPT_THIS_STUDY_MODEL_TICK_LABEL_SIZE,
+) -> tuple[plt.Figure, np.ndarray]:
+    """
+    Plot the notebook-style two-panel "this study" summary figure.
+
+    Parameters
+    ----------
+    cpx_only_workflows, cpx_liq_workflows
+        Workflow bundles for the `cpx_only` and `cpx_liq` branches. Each input
+        may be a :class:`ThermobarometryWorkflowBundle` or a mapping with keys
+        like ``pressure_2006`` / ``temperature_2010``.
+    pressure_columns, temperature_columns
+        Mappings with keys ``"cpx_only"`` and ``"cpx_liq"`` whose values are
+        the model-result column names to plot in left-to-right order.
+    pressure_model_pool, temperature_model_pool : sequence, optional
+        Model objects used to draw uncertainty bands. Their ``model_name`` and
+        ``uncertainty`` attributes are read when available.
+    selection_threshold : float, default 50.0
+        If the top-ranked model frequency is above this percentage, only that
+        model is highlighted. Otherwise the top two are highlighted.
+    pressure_ylim, pressure_ticks : optional
+        Optional fixed pressure-axis limits/ticks for the pressure panel.
+    subplot_hspace : float, optional
+        Vertical spacing between the pressure and temperature panels.
+    save_path : path-like, optional
+        If given, save the figure after creation.
+
+    Returns
+    -------
+    fig, axes
+        Matplotlib figure and the two panel axes.
+    """
+    state = _build_ranked_thermobarometry_state(
+        cpx_only_workflows,
+        cpx_liq_workflows,
+        pressure_columns,
+        temperature_columns,
+        pressure_model_pool=pressure_model_pool,
+        temperature_model_pool=temperature_model_pool,
+    )
+
+    fig, axes = plt.subplots(2, 1, figsize=figsize, constrained_layout=constrained_layout)
+    if subplot_hspace is not None:
+        if constrained_layout:
+            fig.set_constrained_layout_pads(hspace=subplot_hspace)
+        else:
+            fig.subplots_adjust(hspace=subplot_hspace)
+
+    _plot_ranked_this_study_kind_panel(
+        axes[0],
+        "P",
+        state,
+        selection_threshold=selection_threshold,
+        pressure_ylim=pressure_ylim,
+        pressure_ticks=pressure_ticks,
+        densities_kg_m3=densities_kg_m3,
+        layer_boundaries_km=layer_boundaries_km,
+        depth_tick_step=depth_tick_step,
+        depth_max=depth_max,
+        use_model_abbreviations=use_model_abbreviations,
+        axis_label_fontsize=MANUSCRIPT_THIS_STUDY_AXIS_LABEL_SIZE,
+        y_axis_label_fontsize=MANUSCRIPT_THIS_STUDY_Y_AXIS_LABEL_SIZE,
+        tick_labelsize=tick_labelsize,
+        model_tick_labelsize=model_tick_labelsize,
+        group_label_fontsize=MANUSCRIPT_THIS_STUDY_GROUP_LABEL_SIZE,
+        annotation_fontsize=MANUSCRIPT_THIS_STUDY_ANNOTATION_SIZE,
+    )
+    _plot_ranked_this_study_kind_panel(
+        axes[1],
+        "T",
+        state,
+        selection_threshold=selection_threshold,
+        depth_tick_step=depth_tick_step,
+        depth_max=depth_max,
+        use_model_abbreviations=use_model_abbreviations,
+        axis_label_fontsize=MANUSCRIPT_THIS_STUDY_AXIS_LABEL_SIZE,
+        y_axis_label_fontsize=MANUSCRIPT_THIS_STUDY_Y_AXIS_LABEL_SIZE,
+        tick_labelsize=tick_labelsize,
+        model_tick_labelsize=model_tick_labelsize,
+        group_label_fontsize=MANUSCRIPT_THIS_STUDY_GROUP_LABEL_SIZE,
+        annotation_fontsize=MANUSCRIPT_THIS_STUDY_ANNOTATION_SIZE,
+    )
+
+    if add_legend:
+        legend_items = [
+            Patch(facecolor="blue", edgecolor="k", alpha=1.0, label="2006 eruption"),
+            Patch(facecolor="red", edgecolor="k", alpha=1.0, label="2010 eruption"),
+            Patch(facecolor="white", edgecolor="k", linestyle="--", linewidth=3.0, label="Selected model"),
+        ]
+        axes[0].legend(
+            handles=legend_items,
+            bbox_to_anchor=(0.02, 0.98),
+            ncol=2,
+            frameon=True,
+            fontsize=MANUSCRIPT_THIS_STUDY_LEGEND_SIZE,
+            borderpad=0.35,
+            handlelength=1.6,
+            handletextpad=0.5,
+        )
+
+    if panel_labels:
+        _add_panel_label(axes[0], panel_labels[0])
+        if len(panel_labels) > 1:
+            _add_panel_label(axes[1], panel_labels[1], y=1.045)
+
+    _apply_this_study_axis_font_sizes(fig, tick_labelsize=tick_labelsize, model_tick_labelsize=model_tick_labelsize)
+
+    if save_path is not None:
+        fig.savefig(Path(save_path), dpi=300)
+
+    return fig, axes
+
+
+def plot_ranked_thermobarometry_literature_comparison(
+    cpx_only_workflows: Any,
+    cpx_liq_workflows: Any,
+    pressure_columns: Mapping[str, Sequence[str]],
+    temperature_columns: Mapping[str, Sequence[str]],
+    pressure_literature: Any,
+    temperature_literature: Any,
+    *,
+    pressure_model_pool: Optional[Sequence[Any]] = None,
+    temperature_model_pool: Optional[Sequence[Any]] = None,
+    liquid_results: Optional[Mapping[str, Any]] = None,
+    selection_threshold: float = 50.0,
+    pressure_ylim: Optional[tuple[float, float]] = None,
+    temperature_ylim: Optional[tuple[float, float]] = (900, 1200),
+    pressure_ticks: Optional[Sequence[float]] = None,
+    densities_kg_m3: Optional[Sequence[float]] = None,
+    layer_boundaries_km: Optional[Sequence[float]] = None,
+    literature_pressure_source: str = "pressure",
+    depth_tick_step: float = 5,
+    depth_max: float = 37,
+    figsize: tuple[float, float] = (16.5, 16),
+    constrained_layout: bool = True,
+    add_literature_legend: bool = True,
+    panel_labels: tuple[str, ...] = ("(a)", "(b)"),
+    save_path: Optional[str | Path] = None,
+    use_model_abbreviations: bool = False,
+    pressure_reservoir_bands: Optional[Sequence[Mapping[str, Any]]] = None,
+    include_temperature: bool = True,
+    split_literature_legend: bool = False,
+    literature_legend_bbox_to_anchor: tuple[float, float] = (0.58, 0.50),
+    literature_model_tick_labelsize: float = MANUSCRIPT_MODEL_TICK_LABEL_SIZE,
+    literature_reservoir_label_x_offset: float = 0.95,
+    literature_reservoir_label_right_margin: float = 0.10,
+) -> tuple[plt.Figure, np.ndarray]:
+    """
+    Plot the notebook-style two-panel "this study vs literature" comparison.
+
+    Parameters
+    ----------
+    pressure_literature, temperature_literature
+        Either DataFrames or Excel paths. If a ``plot`` column is present it is
+        used as a boolean include mask, matching the notebook workflow.
+
+    Returns
+    -------
+    fig, axes
+        Matplotlib figure and the two panel axes.
+    """
+    state = _build_ranked_thermobarometry_state(
+        cpx_only_workflows,
+        cpx_liq_workflows,
+        pressure_columns,
+        temperature_columns,
+        pressure_model_pool=pressure_model_pool,
+        temperature_model_pool=temperature_model_pool,
+        liquid_results=liquid_results,
+    )
+    pressure_literature_df = _load_literature_table(pressure_literature, "pressure_literature")
+    temperature_literature_df = (
+        _load_literature_table(temperature_literature, "temperature_literature")
+        if include_temperature
+        else None
+    )
+
+    if include_temperature:
+        fig, axes_obj = plt.subplots(2, 1, figsize=figsize, constrained_layout=constrained_layout)
+        axes = np.asarray(axes_obj)
+    else:
+        fig, ax = plt.subplots(1, 1, figsize=figsize, constrained_layout=constrained_layout)
+        axes = np.asarray([ax])
+
+    _plot_ranked_literature_panel(
+        axes[0],
+        "P",
+        state,
+        pressure_literature_df,
+        selection_threshold=selection_threshold,
+        add_literature_legend=add_literature_legend,
+        pressure_ylim=pressure_ylim,
+        pressure_ticks=pressure_ticks,
+        densities_kg_m3=densities_kg_m3,
+        layer_boundaries_km=layer_boundaries_km,
+        literature_pressure_source=literature_pressure_source,
+        depth_tick_step=depth_tick_step,
+        depth_max=depth_max,
+        use_model_abbreviations=use_model_abbreviations,
+        model_tick_labelsize=literature_model_tick_labelsize,
+        pressure_reservoir_bands=pressure_reservoir_bands,
+        split_literature_legend=split_literature_legend,
+        literature_legend_bbox_to_anchor=literature_legend_bbox_to_anchor,
+        reservoir_label_x_offset=literature_reservoir_label_x_offset,
+        reservoir_label_right_margin=literature_reservoir_label_right_margin,
+    )
+    if include_temperature and temperature_literature_df is not None:
+        _plot_ranked_literature_panel(
+            axes[1],
+            "T",
+            state,
+            temperature_literature_df,
+            selection_threshold=selection_threshold,
+            add_literature_legend=False,
+            temperature_ylim=temperature_ylim,
+            depth_tick_step=depth_tick_step,
+            depth_max=depth_max,
+            use_model_abbreviations=use_model_abbreviations,
+            model_tick_labelsize=literature_model_tick_labelsize,
+        )
+
+    if panel_labels:
+        for ax_i, label in enumerate(panel_labels[: len(axes)]):
+            _add_panel_label(axes[ax_i], label)
+
+    if save_path is not None:
+        fig.savefig(Path(save_path), dpi=300)
+
+    return fig, axes
+
+
+def plot_ranked_thermobarometry_original_vs_hps_comparison(
+    original_cpx_only: Any,
+    original_cpx_liq: Any,
+    hps_cpx_only: Any,
+    hps_cpx_liq: Any,
+    pressure_columns: Mapping[str, Sequence[str]],
+    temperature_columns: Mapping[str, Sequence[str]],
+    *,
+    pressure_model_pool: Optional[Sequence[Any]] = None,
+    temperature_model_pool: Optional[Sequence[Any]] = None,
+    selection_threshold: float = 50.0,
+    pressure_ylim: Optional[tuple[float, float]] = (-1, 10),
+    temperature_ylim: Optional[tuple[float, float]] = None,
+    figsize: tuple[float, float] = (14.0, 11.0),
+    panel_labels: tuple[str, ...] = ("(a)", "(b)"),
+    save_path: Optional[str | Path] = None,
+    use_model_abbreviations: bool = True,
+) -> tuple[plt.Figure, np.ndarray]:
+    """
+    Plot a two-panel comparison of original and +HPS this-study results.
+
+    Each panel has four x-axis groups: cpx-only original, cpx-only +HPS,
+    cpx-liq original, and cpx-liq +HPS. Each group contains 2006 and 2010
+    selected-model prediction distributions.
+    """
+    original_state = _build_ranked_thermobarometry_state(
+        original_cpx_only,
+        original_cpx_liq,
+        pressure_columns,
+        temperature_columns,
+        pressure_model_pool=pressure_model_pool,
+        temperature_model_pool=temperature_model_pool,
+    )
+    hps_state = _build_ranked_thermobarometry_state(
+        hps_cpx_only,
+        hps_cpx_liq,
+        pressure_columns,
+        temperature_columns,
+        pressure_model_pool=pressure_model_pool,
+        temperature_model_pool=temperature_model_pool,
+    )
+
+    fig, axes_obj = plt.subplots(2, 1, figsize=figsize, constrained_layout=True)
+    fig.set_constrained_layout_pads(hspace=0.14)
+    axes = np.asarray(axes_obj)
+
+    _plot_original_vs_hps_kind_panel(
+        axes[0],
+        "P",
+        original_state,
+        hps_state,
+        selection_threshold=selection_threshold,
+        pressure_ylim=pressure_ylim,
+        temperature_ylim=temperature_ylim,
+        use_model_abbreviations=use_model_abbreviations,
+    )
+    _plot_original_vs_hps_kind_panel(
+        axes[1],
+        "T",
+        original_state,
+        hps_state,
+        selection_threshold=selection_threshold,
+        pressure_ylim=pressure_ylim,
+        temperature_ylim=temperature_ylim,
+        use_model_abbreviations=use_model_abbreviations,
+    )
+
+    legend_items = [
+        Patch(facecolor="blue", edgecolor="k", alpha=1.0, label="2006 eruption"),
+        Patch(facecolor="red", edgecolor="k", alpha=1.0, label="2010 eruption"),
+    ]
+    axes[0].legend(
+        handles=legend_items,
+        loc="upper left",
+        bbox_to_anchor=(0.01, 0.25),
+        frameon=True,
+        ncol=1,
+        fontsize=MANUSCRIPT_THIS_STUDY_LEGEND_SIZE,
+        borderpad=0.35,
+        handlelength=1.6,
+        handletextpad=0.5,
+    )
+
+    if panel_labels:
+        for ax_i, label in enumerate(panel_labels[: len(axes)]):
+            _add_panel_label(axes[ax_i], label, y = 1.1)
+
+    if save_path is not None:
+        fig.savefig(Path(save_path), dpi=300)
+
+    return fig, axes
+
+
+def _show_ranked_thermobarometry_figures(figures: Mapping[str, tuple[plt.Figure, np.ndarray]]) -> None:
+    backend = plt.get_backend().lower()
+    if backend.endswith("agg"):
+        try:
+            from IPython.display import display
+        except ImportError:
+            return
+
+        # Agg cannot show interactively, but notebooks can still render figures.
+        for fig, _axes in figures.values():
+            display(fig)
+        return
+
+    plt.show()
+
+
+def plot_ranked_thermobarometry_summary(
+    cpx_only_workflows: Any,
+    cpx_liq_workflows: Any,
+    pressure_columns: Mapping[str, Sequence[str]],
+    temperature_columns: Mapping[str, Sequence[str]],
+    *,
+    pressure_model_pool: Optional[Sequence[Any]] = None,
+    temperature_model_pool: Optional[Sequence[Any]] = None,
+    pressure_literature: Any = None,
+    temperature_literature: Any = None,
+    liquid_results: Optional[Mapping[str, Any]] = None,
+    selection_threshold: float = 50.0,
+    pressure_ylim: Optional[tuple[float, float]] = None,
+    temperature_ylim: Optional[tuple[float, float]] = (900, 1150),
+    pressure_ticks: Optional[Sequence[float]] = None,
+    densities_kg_m3: Optional[Sequence[float]] = None,
+    layer_boundaries_km: Optional[Sequence[float]] = None,
+    literature_pressure_source: str = "pressure",
+    depth_tick_step: float = 5,
+    depth_max: float = 37,
+    this_study_figsize: tuple[float, float] = (20.5, 16),
+    literature_figsize: tuple[float, float] = (16.5, 16),
+    this_study_save_path: Optional[str | Path] = None,
+    literature_save_path: Optional[str | Path] = None,
+    this_study_subplot_hspace: Optional[float] = 0.08,
+    show: bool = True,
+    use_model_abbreviations: bool = False,
+    pressure_reservoir_bands: Optional[Sequence[Mapping[str, Any]]] = None,
+    literature_include_temperature: bool = True,
+    literature_panel_labels: tuple[str, ...] = ("(a)", "(b)"),
+    this_study_tick_labelsize: float = MANUSCRIPT_THIS_STUDY_TICK_LABEL_SIZE,
+    this_study_model_tick_labelsize: float = MANUSCRIPT_THIS_STUDY_MODEL_TICK_LABEL_SIZE,
+    split_literature_legend: bool = False,
+    literature_legend_bbox_to_anchor: tuple[float, float] = (0.58, 0.50),
+    literature_model_tick_labelsize: Optional[float] = None,
+    literature_reservoir_label_x_offset: float = 0.95,
+    literature_reservoir_label_right_margin: float = 0.10,
+) -> dict[str, tuple[plt.Figure, np.ndarray]]:
+    """
+    Convenience wrapper that reproduces both notebook summary figures.
+
+    Parameters
+    ----------
+    show : bool, default True
+        Whether to display the generated figures before returning them.
+
+    Returns
+    -------
+    dict
+        Always includes ``"this_study"``. Includes
+        ``"literature_comparison"`` only when both literature tables are
+        provided.
+    """
+    literature_model_tick_labelsize = (
+        this_study_model_tick_labelsize
+        if literature_model_tick_labelsize is None
+        else literature_model_tick_labelsize
+    )
+
+    figures = {
+        "this_study": plot_ranked_thermobarometry_this_study(
+            cpx_only_workflows,
+            cpx_liq_workflows,
+            pressure_columns,
+            temperature_columns,
+            pressure_model_pool=pressure_model_pool,
+            temperature_model_pool=temperature_model_pool,
+            selection_threshold=selection_threshold,
+            pressure_ylim=pressure_ylim,
+            pressure_ticks=pressure_ticks,
+            densities_kg_m3=densities_kg_m3,
+            layer_boundaries_km=layer_boundaries_km,
+            depth_tick_step=depth_tick_step,
+            depth_max=depth_max,
+            figsize=this_study_figsize,
+            subplot_hspace=this_study_subplot_hspace,
+            save_path=this_study_save_path,
+            use_model_abbreviations=use_model_abbreviations,
+            tick_labelsize=this_study_tick_labelsize,
+            model_tick_labelsize=this_study_model_tick_labelsize,
+        )
+    }
+
+    if pressure_literature is not None and (temperature_literature is not None or not literature_include_temperature):
+        figures["literature_comparison"] = plot_ranked_thermobarometry_literature_comparison(
+            cpx_only_workflows,
+            cpx_liq_workflows,
+            pressure_columns,
+            temperature_columns,
+            pressure_literature,
+            temperature_literature,
+            pressure_model_pool=pressure_model_pool,
+            temperature_model_pool=temperature_model_pool,
+            liquid_results=liquid_results,
+            selection_threshold=selection_threshold,
+            pressure_ylim=pressure_ylim,
+            temperature_ylim=temperature_ylim,
+            pressure_ticks=pressure_ticks,
+            densities_kg_m3=densities_kg_m3,
+            layer_boundaries_km=layer_boundaries_km,
+            literature_pressure_source=literature_pressure_source,
+            depth_tick_step=depth_tick_step,
+            depth_max=depth_max,
+            figsize=literature_figsize,
+            save_path=literature_save_path,
+            use_model_abbreviations=use_model_abbreviations,
+            pressure_reservoir_bands=pressure_reservoir_bands,
+            include_temperature=literature_include_temperature,
+            panel_labels=literature_panel_labels,
+            split_literature_legend=split_literature_legend,
+            literature_legend_bbox_to_anchor=literature_legend_bbox_to_anchor,
+            literature_model_tick_labelsize=literature_model_tick_labelsize,
+            literature_reservoir_label_x_offset=literature_reservoir_label_x_offset,
+            literature_reservoir_label_right_margin=literature_reservoir_label_right_margin,
+        )
+
+    if show:
+        _show_ranked_thermobarometry_figures(figures)
+
+    return figures
+
 
 # Helpers extracted from 04_apply_AIMS4PT_cpx_to_Merapi.ipynb cell 9.
 def print_df_for_md_format__nb04_c09(df: pd.DataFrame):
@@ -474,7 +3146,7 @@ def pairwise_euclidean__nb04_c77(A: np.ndarray, B: np.ndarray) -> np.ndarray:
     Compute pairwise Euclidean distances between rows of A (n x d) and B (m x d).
     Returns dist matrix (n x m).
     """
-    # ||a-b||^2 = ||a||^2 + ||b||^2 - 2 a·b
+    # ||a-b||^2 = ||a||^2 + ||b||^2 - 2 a路b
     A2 = np.sum(A * A, axis=1)[:, None]   # (n,1)
     B2 = np.sum(B * B, axis=1)[None, :]   # (1,m)
     D2 = A2 + B2 - 2.0 * (A @ B.T)
@@ -603,7 +3275,7 @@ def pairwise_euclidean__nb04_c78(A: np.ndarray, B: np.ndarray) -> np.ndarray:
     Compute pairwise Euclidean distances between rows of A (n x d) and B (m x d).
     Returns dist matrix (n x m).
     """
-    # ||a-b||^2 = ||a||^2 + ||b||^2 - 2 a·b
+    # ||a-b||^2 = ||a||^2 + ||b||^2 - 2 a路b
     A2 = np.sum(A * A, axis=1)[:, None]   # (n,1)
     B2 = np.sum(B * B, axis=1)[None, :]   # (1,m)
     D2 = A2 + B2 - 2.0 * (A @ B.T)
