@@ -932,13 +932,28 @@ def _redraw_violin_median(
     color: str = "k",
     lw: float = 1.8,
     zorder: float = 4.6,
+    linestyle: str = "-",
+    alpha: float = 1.0,
+    width_frac: float = 0.24,
+    filter_outliers: bool = True,
 ) -> None:
-    clean_values = _remove_boxplot_outliers(values)
+    values_arr = np.asarray(values, dtype=float).ravel()
+    values_arr = values_arr[np.isfinite(values_arr)]
+    clean_values = _remove_boxplot_outliers(values_arr) if filter_outliers else values_arr
     if clean_values.size == 0:
         return
     median = float(np.nanmedian(clean_values))
-    half_width = 0.24 * width
-    ax.hlines(median, float(x_center) - half_width, float(x_center) + half_width, color=color, lw=lw, zorder=zorder)
+    half_width = float(width_frac) * width
+    ax.hlines(
+        median,
+        float(x_center) - half_width,
+        float(x_center) + half_width,
+        color=color,
+        lw=lw,
+        linestyle=linestyle,
+        alpha=alpha,
+        zorder=zorder,
+    )
 
 
 def _annotate_above_data(
@@ -1949,6 +1964,24 @@ def _selected_predictions_from_best_models(df_pred: pd.DataFrame, best_model_ser
     return np.asarray(values, dtype=float)
 
 
+def _selected_predictions_for_model(
+    df_pred: pd.DataFrame,
+    best_model_series: pd.Series,
+    model_name: str,
+) -> np.ndarray:
+    common_index = best_model_series.index.intersection(df_pred.index)
+    if len(common_index) == 0 or model_name not in df_pred.columns:
+        return np.asarray([], dtype=float)
+
+    best_models = best_model_series.loc[common_index]
+    selected_index = best_models.index[best_models.notna() & best_models.astype(str).eq(str(model_name))]
+    values = pd.to_numeric(df_pred.loc[selected_index, model_name], errors="coerce").replace(
+        [np.inf, -np.inf],
+        np.nan,
+    )
+    return values.dropna().to_numpy(dtype=float)
+
+
 def _build_this_study_columns_for_comparison(
     kind: str,
     state: Mapping[str, Any],
@@ -1974,6 +2007,15 @@ def _build_this_study_columns_for_comparison(
             for rank_i, model_name in enumerate(models_to_plot):
                 if model_name not in df_pred.columns:
                     raise KeyError(f"{kind} results {year} {phase_type} are missing column {model_name!r}.")
+                model_data = pd.to_numeric(df_pred[model_name], errors="coerce").replace(
+                    [np.inf, -np.inf],
+                    np.nan,
+                )
+                favored_data = _selected_predictions_for_model(
+                    df_pred,
+                    kind_state["best_models"][year][phase_type],
+                    model_name,
+                )
                 columns.append(
                     {
                         "category": "This study",
@@ -1985,7 +2027,8 @@ def _build_this_study_columns_for_comparison(
                             kind,
                             use_model_abbreviations=use_model_abbreviations,
                         ),
-                        "data": _remove_boxplot_outliers(df_pred[model_name].dropna().to_numpy()),
+                        "data": model_data.dropna().to_numpy(dtype=float),
+                        "favored_data": favored_data,
                         "overall_data": overall_data,
                         "rank_i": rank_i,
                         "pct": rank_pct_map.get(model_name),
@@ -2101,6 +2144,231 @@ def _plot_this_study_boxes_on_comparison(
     return last_bp
 
 
+def _draw_literature_comparison_violin(
+    ax: plt.Axes,
+    x_center: float,
+    values: Sequence[float],
+    *,
+    width: float,
+    facecolor: str,
+    edgecolor: str,
+    alpha: float,
+    lw: float,
+    zorder: float,
+    median_color: str,
+    median_lw: float,
+    median_linestyle: str = "-",
+    median_width_frac: float = 0.24,
+    median_filter_outliers: bool = True,
+) -> None:
+    clean_values = np.asarray(values, dtype=float).ravel()
+    clean_values = clean_values[np.isfinite(clean_values)]
+    if clean_values.size == 0:
+        return
+
+    can_draw_violin = clean_values.size >= 3 and np.nanstd(clean_values) > 0
+    if can_draw_violin:
+        try:
+            vp = _draw_violin(
+                ax,
+                [clean_values],
+                [x_center],
+                widths=width,
+                facecolor=facecolor,
+                edgecolor=edgecolor,
+                lw=lw,
+                alpha=alpha,
+                bw_method=0.25,
+                zorder=zorder,
+            )
+        except (ValueError, np.linalg.LinAlgError):
+            vp = {}
+        if "cmedians" in vp:
+            vp["cmedians"].set_alpha(0.0)
+
+    _redraw_violin_median(
+        ax,
+        x_center,
+        clean_values,
+        width,
+        color=median_color,
+        lw=median_lw,
+        zorder=zorder + 0.45,
+        linestyle=median_linestyle,
+        width_frac=median_width_frac,
+        filter_outliers=median_filter_outliers,
+    )
+
+
+def _annotate_favored_pct_above_violin(
+    ax: plt.Axes,
+    x_center: float,
+    values: Sequence[float],
+    text: str,
+    color: str,
+    *,
+    kind: str,
+    y_pad_frac: float = 0.025,
+    fontsize: float = 14,
+) -> None:
+    clean_values = np.asarray(values, dtype=float).ravel()
+    clean_values = clean_values[np.isfinite(clean_values)]
+    if clean_values.size == 0:
+        return
+    y_min, y_max = ax.get_ylim()
+    y_pad = abs(y_max - y_min) * y_pad_frac
+    y_anchor = float(np.nanmin(clean_values) - y_pad) if kind == "P" else float(np.nanmax(clean_values) + y_pad)
+    ax.text(
+        float(x_center),
+        y_anchor,
+        text,
+        color=color,
+        fontsize=fontsize,
+        fontweight="bold",
+        ha="center",
+        va="bottom",
+        zorder=6,
+        clip_on=True,
+    )
+
+
+def _plot_liquid_subcolumn_violins_on_literature_comparison(
+    ax: plt.Axes,
+    x_center: float,
+    subcolumns: Sequence[Mapping[str, Any]],
+    *,
+    kind: str,
+    annotation_fontsize: float,
+) -> None:
+    if not subcolumns:
+        return
+
+    eruption_positions = {"2006": x_center - 0.10, "2010": x_center + 0.10}
+    sub_positions = np.array(
+        [eruption_positions.get(subcol["eruption"], x_center) for subcol in subcolumns],
+        dtype=float,
+    )
+    phase_data: dict[str, list[np.ndarray]] = defaultdict(list)
+    phase_positions: dict[str, list[float]] = defaultdict(list)
+    for subcol, sub_position in zip(subcolumns, sub_positions):
+        _draw_literature_comparison_violin(
+            ax,
+            float(sub_position),
+            subcol["data"],
+            width=0.24,
+            facecolor=subcol["fill"],
+            edgecolor="none",
+            alpha=0.22,
+            lw=0.0,
+            zorder=2.2,
+            median_color="k",
+            median_lw=1.2,
+        )
+        phase_data[subcol["phase_name"]].append(np.asarray(subcol["data"], dtype=float))
+        phase_positions[subcol["phase_name"]].append(float(sub_position))
+
+    y_min, y_max = ax.get_ylim()
+    y_pad = max((y_max - y_min) * 0.03, 0.15 if kind == "P" else 3.0)
+    for phase_name, phase_label in (("glass", "glass"), ("bulk", "bulk rock")):
+        values = phase_data.get(phase_name, [])
+        if not values:
+            continue
+        phase_concat = np.concatenate(values)
+        phase_concat = phase_concat[np.isfinite(phase_concat)]
+        if phase_concat.size == 0:
+            continue
+        label_x = float(np.mean(phase_positions.get(phase_name, [x_center])))
+        if kind == "P":
+            label_y = float(np.nanmin(phase_concat) - y_pad)
+        else:
+            label_y = float(np.nanmax(phase_concat) + y_pad)
+        _annotate_grouped_box_label(ax, label_x, label_y, phase_label, fontsize=annotation_fontsize, color="0.15")
+
+
+def _plot_this_study_dual_violins_on_literature_comparison(
+    ax: plt.Axes,
+    this_cols: Sequence[Mapping[str, Any]],
+    *,
+    kind: str,
+    annotation_fontsize: float = MANUSCRIPT_ANNOTATION_SIZE,
+    annotate_rmse: bool = True,
+) -> None:
+    if len(this_cols) == 0:
+        return
+
+    x_centers = np.arange(1, len(this_cols) + 1)
+    for i, col in enumerate(this_cols):
+        x_center = float(x_centers[i])
+        if "subcolumns" in col:
+            _plot_liquid_subcolumn_violins_on_literature_comparison(
+                ax,
+                x_center,
+                list(col["subcolumns"]),
+                kind=kind,
+                annotation_fontsize=annotation_fontsize,
+            )
+            continue
+
+        eruption_color = col["fill"]
+        all_data = col.get("data", [])
+        favored_data = col.get("favored_data", [])
+
+        all_x = x_center - 0.10
+        favored_x = x_center + 0.16
+
+        _draw_literature_comparison_violin(
+            ax,
+            all_x,
+            all_data,
+            width=0.30,
+            facecolor=eruption_color,
+            edgecolor=eruption_color,
+            alpha=0.42,
+            lw=0.7,
+            zorder=3.0,
+            median_color="k",
+            median_lw=1.5,
+            median_width_frac=0.34,
+            median_filter_outliers=False,
+        )
+        _draw_literature_comparison_violin(
+            ax,
+            favored_x,
+            favored_data,
+            width=0.16,
+            facecolor="none",
+            edgecolor=eruption_color,
+            alpha=1.0,
+            lw=1.3,
+            zorder=3.4,
+            median_color="k",
+            median_lw=1.5,
+            median_width_frac=0.34,
+            median_filter_outliers=False,
+        )
+
+        if annotate_rmse:
+            _annotate_literature_uncertainty_below_xtick(
+                ax,
+                x_center,
+                col.get("uncertainty"),
+                kind=kind,
+                fontsize=annotation_fontsize,
+            )
+        pct = col.get("pct")
+        if pct is not None:
+            annotation_data = favored_data if np.asarray(favored_data, dtype=float).size > 0 else all_data
+            _annotate_favored_pct_above_violin(
+                ax,
+                favored_x,
+                annotation_data,
+                f"{int(round(pct))}%",
+                eruption_color,
+                kind=kind,
+                fontsize=annotation_fontsize,
+            )
+
+
 def _build_methods_for_bands(this_cols: Sequence[Mapping[str, Any]], lit_methods: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     this_for_bands = [{"category": col["category"], "type": col["type"], "label": col["label"]} for col in this_cols]
     lit_for_bands = [{"category": method["category"], "type": method["type"], "label": method["label"]} for method in lit_methods]
@@ -2153,6 +2421,31 @@ def _annotate_rmse_below_zero(
         va="top",
         fontsize=fontsize,
         color="0.15",
+        zorder=5,
+        clip_on=False,
+    )
+
+
+def _annotate_literature_uncertainty_below_xtick(
+    ax: plt.Axes,
+    x_center: float,
+    uncertainty: Any,
+    *,
+    kind: str,
+    fontsize: float,
+) -> None:
+    finite_uncertainty = _finite_uncertainty(uncertainty)
+    if kind != "P" or finite_uncertainty is None:
+        return
+    ax.text(
+        x_center,
+        -0.06,
+        f"{finite_uncertainty:.1f} kbar",
+        transform=ax.get_xaxis_transform(),
+        ha="center",
+        va="top",
+        fontsize=fontsize,
+        color="0.45",
         zorder=5,
         clip_on=False,
     )
@@ -2292,7 +2585,7 @@ def _plot_ranked_literature_panel(
 
     n_this = len(this_cols)
     if n_this > 0:
-        _plot_this_study_boxes_on_comparison(
+        _plot_this_study_dual_violins_on_literature_comparison(
             ax,
             this_cols,
             kind=kind,
@@ -2389,58 +2682,85 @@ def _plot_ranked_literature_panel(
             tick_labelsize=tick_labelsize,
         )
     else:
-        ax.set_ylabel("Temperature (掳C)", fontsize=y_axis_label_fontsize)
+        ax.set_ylabel("Temperature (°C)", fontsize=y_axis_label_fontsize)
         if temperature_ylim is not None:
             ax.set_ylim(*temperature_ylim)
         ax.tick_params(axis="y", labelsize=tick_labelsize)
     ax.xaxis.label.set_size(axis_label_fontsize)
 
     if add_literature_legend:
-        this_study_handles = [
-            Patch(facecolor="blue", edgecolor="k", alpha=1.0, label="2006 (this study)"),
-            Patch(facecolor="red", edgecolor="k", alpha=1.0, label="2010 (this study)"),
-        ]
-        literature_handles = [
-            Line2D([0], [0], color="purple", lw=4.0, label="2006&2010 (literature)"),
-            Line2D([0], [0], color="blue", lw=4.0, label="2006 (literature)"),
-            Line2D([0], [0], color="red", lw=4.0, label="2010 (literature)"),
-        ]
-        if split_literature_legend:
-            this_legend = ax.legend(
-                handles=this_study_handles,
-                loc="lower left",
-                bbox_to_anchor=this_study_legend_bbox_to_anchor,
-                frameon=True,
-                ncol=1,
-                fontsize=legend_fontsize,
-                borderpad=0.35,
-                handlelength=1.6,
-                handletextpad=0.5,
-            )
-            ax.add_artist(this_legend)
-            ax.legend(
-                handles=literature_handles,
-                loc="center",
-                bbox_to_anchor=literature_legend_bbox_to_anchor,
-                frameon=True,
-                ncol=1,
-                fontsize=legend_fontsize,
-                borderpad=0.35,
-                handlelength=1.6,
-                handletextpad=0.5,
-            )
-        else:
-            ax.legend(
-                handles=[*this_study_handles, *literature_handles],
-                loc="lower left",
-                bbox_to_anchor=this_study_legend_bbox_to_anchor,
-                frameon=True,
-                ncol=3,
-                fontsize=legend_fontsize,
-                borderpad=0.35,
-                handlelength=1.6,
-                handletextpad=0.5,
-            )
+    
+        from matplotlib.lines import Line2D
+        from matplotlib.patches import Patch
+        from matplotlib.legend_handler import HandlerTuple
+        year_2006_handle = (
+            Patch(
+                facecolor="blue",
+                alpha=0.55,
+            ),
+            Line2D(
+                [0], [0],
+                color="blue",
+                lw=2.2,
+                alpha=1,
+            ),
+        )
+        year_2010_handle = (
+            Patch(
+                facecolor="red",
+                alpha=0.55,
+            ),
+            Line2D(
+                [0], [0],
+                color="red",
+                lw=2.2,
+                alpha=1,
+            ),
+        )
+
+        year_both_handle = (
+            Line2D([0], [0], color="purple", lw=3.2),
+        )
+
+        filled_violin_handle = (
+            Patch(facecolor="0.60", edgecolor="0.25", alpha=0.55),
+        )
+
+        open_violin_handle = (
+            Patch(facecolor="none", edgecolor="0.25", linewidth=1.4),
+        )
+
+        blank_handle = (
+            Line2D([0], [0], color="none", lw=0.0),
+        )
+        ax.legend(
+            handles=[
+                year_2006_handle,
+                year_2010_handle,
+                year_both_handle,
+                filled_violin_handle,
+                open_violin_handle,
+                blank_handle,
+            ],
+            labels=[
+                "2006",
+                "2010",
+                "2006 & 2010",
+                "all samples",
+                "favored subset",
+                "",
+            ],
+            loc="lower left",
+            bbox_to_anchor=this_study_legend_bbox_to_anchor,
+            frameon=True,
+            ncol=2,
+            fontsize=legend_fontsize,
+            borderpad=0.35,
+            columnspacing=1.75,
+            handlelength=2.1,
+            handletextpad=0.5,
+            labelspacing=0.25,
+        )
 
 
 def _build_original_vs_hps_columns_for_comparison(
@@ -2512,7 +2832,7 @@ def _plot_original_vs_hps_kind_panel(
             category_fontsize=MANUSCRIPT_GROUP_LABEL_SIZE,
             type_fontsize=annotation_fontsize,
         )
-        _plot_this_study_boxes_on_comparison(
+        _plot_this_study_dual_violins_on_literature_comparison(
             ax,
             columns,
             kind=kind,
@@ -2920,19 +3240,45 @@ def plot_ranked_thermobarometry_original_vs_hps_comparison(
     )
 
     legend_items = [
-        Patch(facecolor="blue", edgecolor="k", alpha=1.0, label="2006 eruption"),
-        Patch(facecolor="red", edgecolor="k", alpha=1.0, label="2010 eruption"),
+        Line2D(
+            [0],
+            [0],
+            color="blue",
+            lw=2.2,
+            marker="s",
+            markersize=7.5,
+            markerfacecolor="blue",
+            markeredgecolor="blue",
+            alpha=0.85,
+            label="2006",
+        ),
+        Line2D(
+            [0],
+            [0],
+            color="red",
+            lw=2.2,
+            marker="s",
+            markersize=7.5,
+            markerfacecolor="red",
+            markeredgecolor="red",
+            alpha=0.85,
+            label="2010",
+        ),
+        Patch(facecolor="0.60", edgecolor="0.25", alpha=0.55, label="Filled violin: all valid samples"),
+        Patch(facecolor="none", edgecolor="0.25", linewidth=1.4, label="Open violin: favored samples"),
     ]
     axes[0].legend(
         handles=legend_items,
         loc="upper left",
         bbox_to_anchor=(0.01, 0.25),
         frameon=True,
-        ncol=1,
+        ncol=2,
         fontsize=MANUSCRIPT_THIS_STUDY_LEGEND_SIZE,
         borderpad=0.35,
-        handlelength=1.6,
+        columnspacing=1.75,
+        handlelength=2.1,
         handletextpad=0.5,
+        labelspacing=0.25,
     )
 
     if panel_labels:
