@@ -9,6 +9,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+from matplotlib.legend_handler import HandlerTuple
 from matplotlib.patches import Patch
 from matplotlib.ticker import AutoMinorLocator, FixedLocator, NullLocator
 from matplotlib.transforms import blended_transform_factory
@@ -20,6 +21,7 @@ from aims4pt.toolkit_utils import wrap_text
 
 MERAPI_2006_COLOR = "#3995d6"
 MERAPI_2010_COLOR = "#f15454"
+MERAPI_PRE_2006_COLOR = "#7b3294"
 INDEPENDENT_EXPERIMENTAL_COLOR = "0.62"
 MERAPI_YEAR_COLORS = {"2006": MERAPI_2006_COLOR, "2010": MERAPI_2010_COLOR}
 MERAPI_CIRCLE_SIZES = {"2006": 36, "2010": 46}
@@ -69,6 +71,11 @@ def _liquid_endmember_frame(liq_df: pd.DataFrame, year: str) -> pd.DataFrame:
     group_col = next((col for col in ["glass/bulk", "glass_bulk", "liquid_group"] if col in liq.columns), None)
     if group_col is None:
         raise KeyError("Merapi liquid endmember table must contain a glass/bulk group column.")
+    eruption_col = next((col for col in ["Eruption", "eruption", "eruption_year"] if col in liq.columns), None)
+    if eruption_col is None:
+        is_pre_2006 = pd.Series(False, index=liq.index)
+    else:
+        is_pre_2006 = liq[eruption_col].astype(str).str.strip().str.casefold().eq("pre-2006")
     group = liq[group_col].astype(str).str.lower().str.strip().map(
         {
             "bulk": "whole-rock endmember",
@@ -77,10 +84,25 @@ def _liquid_endmember_frame(liq_df: pd.DataFrame, year: str) -> pd.DataFrame:
             "glass": "glass endmember",
         }
     )
+    group = group.where(~(is_pre_2006 & group.eq("whole-rock endmember")), "whole-rock (pre-2006)")
     out = liq.add_suffix("_liq")
-    out["eruption_year"] = str(year)
+    out["eruption_year"] = np.where(is_pre_2006.to_numpy(), "pre-2006", str(year))
     out["liquid_group"] = group.to_numpy()
     return _add_merapi_plot_columns(out)
+
+
+def _drop_duplicate_pre_2006_liquid_rows(liquid_df: pd.DataFrame) -> pd.DataFrame:
+    """Drop pre-2006 endmember duplicates introduced by year-specific liquid subsets."""
+    if {"eruption_year", "liquid_group"}.difference(liquid_df.columns):
+        return liquid_df
+    pre_2006_mask = (
+        liquid_df["eruption_year"].astype(str).str.casefold().eq("pre-2006")
+        & liquid_df["liquid_group"].astype(str).eq("whole-rock (pre-2006)")
+    )
+    duplicate_mask = pre_2006_mask & liquid_df.duplicated(keep="first")
+    if not duplicate_mask.any():
+        return liquid_df
+    return liquid_df.loc[~duplicate_mask].reset_index(drop=True)
 
 
 def _finite_xy_frame(df: pd.DataFrame, x_col: str, y_col: str) -> pd.DataFrame:
@@ -188,6 +210,7 @@ def _plot_cpx_points(ax, merapi_2006_df: pd.DataFrame, merapi_2010_df: pd.DataFr
 
 LIQUID_GROUP_STYLES = {
     "whole-rock endmember": {"marker": "s", "size": 62, "filled": True},
+    "whole-rock (pre-2006)": {"marker": "s", "size": 62, "filled": True, "facecolor": MERAPI_PRE_2006_COLOR},
     "glass endmember": {"marker": "^", "size": 62, "filled": True},
     "equilibrium liquid": {"marker": "o", "size": 36, "filled": True},
 }
@@ -197,15 +220,16 @@ def _plot_liquid_groups(ax, liquid_df: pd.DataFrame, x_col: str, y_col: str):
     """Plot Merapi liquids with year encoded by color and liquid group by marker/fill."""
     layer_order = [
         ("2010", "whole-rock endmember", 4),
-        ("2010", "glass endmember", 4),
         ("2006", "whole-rock endmember", 5),
+        ("pre-2006", "whole-rock (pre-2006)", 5.5),
+        ("2010", "glass endmember", 4),
         ("2006", "glass endmember", 5),
         ("2010", "equilibrium liquid", 6),
         ("2006", "equilibrium liquid", 7),
     ]
     for year, group, zorder in layer_order:
         style = LIQUID_GROUP_STYLES[group]
-        color = MERAPI_YEAR_COLORS[year]
+        color = style.get("facecolor", MERAPI_YEAR_COLORS.get(year, "0.45"))
         data = liquid_df[
             liquid_df["eruption_year"].astype(str).eq(year)
             & liquid_df["liquid_group"].astype(str).eq(group)
@@ -268,6 +292,7 @@ def _add_liquid_group_legend(ax, loc="upper right", bbox_to_anchor=None):
 
     handles = [
         Line2D([0], [0], marker="s", color="none", markerfacecolor="0.75", markeredgecolor="black", markeredgewidth=0.95, markersize=6.1, label="whole-rock endmember"),
+        Line2D([0], [0], marker="s", color="none", markerfacecolor=MERAPI_PRE_2006_COLOR, markeredgecolor="black", markeredgewidth=0.95, markersize=6.1, label="whole-rock (pre-2006)"),
         Line2D([0], [0], marker="^", color="none", markerfacecolor="0.75", markeredgecolor="black", markeredgewidth=0.95, markersize=6.1, label="glass endmember"),
         Line2D([0], [0], marker="o", color="none", markerfacecolor="0.45", markeredgecolor="0.15", markeredgewidth=0.45, markersize=5.6, label="equilibrium liquid"),
     ]
@@ -363,6 +388,7 @@ def plot_merapi_composition_comparison(
         ],
         ignore_index=True,
     )
+    merapi_liquid_points = _drop_duplicate_pre_2006_liquid_rows(merapi_liquid_points)
 
     panel_specs = [
         {
@@ -626,22 +652,48 @@ def _model_to_index(columns: Sequence[str], model_name: str) -> Optional[int]:
 
 def _pick_models_for_single_eruption(
     rank_pcts: Sequence[tuple[str, float]],
+    *,
     threshold: float,
+    model_selection_mode: str = "cumulative",
+    cumulative_threshold: float = 90.0,
 ) -> list[str]:
-    if len(rank_pcts) == 0:
-        return []
-    rank1_name, rank1_pct = rank_pcts[0]
-    if float(rank1_pct) > threshold or len(rank_pcts) == 1:
-        return [rank1_name]
-    return [rank1_name, rank_pcts[1][0]]
+    selected_ranks = _selected_rank_set_from_topk(
+        rank_pcts,
+        threshold=threshold,
+        model_selection_mode=model_selection_mode,
+        cumulative_threshold=cumulative_threshold,
+    )
+    return [model_name for rank_i, (model_name, _) in enumerate(rank_pcts) if rank_i in selected_ranks]
 
 
-def _selected_rank_set_from_topk(topk: Sequence[tuple[str, float]], threshold: float) -> set[int]:
+def _selected_rank_set_from_topk(
+    topk: Sequence[tuple[str, float]],
+    *,
+    threshold: float,
+    model_selection_mode: str = "cumulative",
+    cumulative_threshold: float = 90.0,
+) -> set[int]:
     if not topk:
         return set()
-    if float(topk[0][1]) > threshold or len(topk) == 1:
-        return {0}
-    return {0, 1}
+
+    mode = str(model_selection_mode).strip().lower()
+    if mode == "top1_or_top2":
+        if float(topk[0][1]) > threshold or len(topk) == 1:
+            return {0}
+        return {0, 1}
+
+    if mode == "cumulative":
+        selected = set()
+        cumulative_pct = 0.0
+        target_pct = float(cumulative_threshold)
+        for rank_i, (_, pct) in enumerate(topk):
+            selected.add(rank_i)
+            cumulative_pct += float(pct)
+            if cumulative_pct >= target_pct:
+                break
+        return selected
+
+    raise ValueError("model_selection_mode must be 'cumulative' or 'top1_or_top2'.")
 
 
 def _finite_uncertainty(value: Any) -> Optional[float]:
@@ -771,6 +823,8 @@ def _display_phase_type_label(value: Any) -> str:
         return "Clinopyroxene-only"
     if key in {"cpx-liq", "cpx-liquid", "clinopyroxene-liquid"}:
         return "Clinopyroxene-liquid"
+    if key == "melt-inclusion":
+        return "Melt\ninclusion"
     return label
 
 
@@ -818,6 +872,7 @@ def _draw_violin(
     alpha: float = 1.0,
     bw_method: float = 0.25,
     zorder: float = 3,
+    show_quartile_interval: bool = True,
 ) -> Mapping[str, Any]:
     vp = ax.violinplot(
         data_list,
@@ -838,7 +893,28 @@ def _draw_violin(
     if "cmedians" in vp:
         vp["cmedians"].set_color("k")
         vp["cmedians"].set_linewidth(max(lw, 1.2))
-        vp["cmedians"].set_zorder(zorder + 1)
+        vp["cmedians"].set_zorder(zorder + 1.15)
+
+    if not show_quartile_interval:
+        return vp
+
+    if np.isscalar(widths):
+        width_values = np.full(len(positions), float(widths), dtype=float)
+    else:
+        width_values = np.asarray(widths, dtype=float).ravel()
+        if width_values.size == 1 and len(positions) != 1:
+            width_values = np.full(len(positions), float(width_values[0]), dtype=float)
+    for values, position, width_value in zip(data_list, positions, width_values):
+        _redraw_violin_quartiles(
+            ax,
+            float(position),
+            values,
+            float(width_value),
+            color="k",
+            lw=max(lw * 0.9, 1.05),
+            zorder=zorder + 1.05,
+            filter_outliers=False,
+        )
     return vp
 
 
@@ -953,6 +1029,42 @@ def _redraw_violin_median(
         linestyle=linestyle,
         alpha=alpha,
         zorder=zorder,
+    )
+
+
+def _redraw_violin_quartiles(
+    ax: plt.Axes,
+    x_center: float,
+    values: Sequence[float],
+    width: float,
+    *,
+    color: str = "k",
+    lw: float = 1.0,
+    zorder: float = 4.5,
+    linestyle: str = "-",
+    alpha: float = 0.95,
+    width_frac: float = 0.0,
+    filter_outliers: bool = True,
+) -> None:
+    """Draw the Q1-Q3 interval as a centered vertical line on a violin."""
+    values_arr = np.asarray(values, dtype=float).ravel()
+    values_arr = values_arr[np.isfinite(values_arr)]
+    clean_values = _remove_boxplot_outliers(values_arr) if filter_outliers else values_arr
+    if clean_values.size == 0:
+        return
+    q1, q3 = np.nanpercentile(clean_values, [25, 75])
+    if not np.isfinite(q1) or not np.isfinite(q3):
+        return
+    x = float(x_center) + float(width_frac) * float(width)
+    ax.plot(
+        [x, x],
+        [float(q1), float(q3)],
+        color=color,
+        lw=lw,
+        linestyle=linestyle,
+        alpha=alpha,
+        zorder=zorder,
+        solid_capstyle="round",
     )
 
 
@@ -1319,6 +1431,8 @@ def _plot_ranked_this_study_kind_panel(
     state: Mapping[str, Any],
     *,
     selection_threshold: float,
+    model_selection_mode: str,
+    cumulative_selection_threshold: float,
     pressure_ylim: Optional[tuple[float, float]] = None,
     pressure_ticks: Optional[Sequence[float]] = None,
     densities_kg_m3: Optional[Sequence[float]] = None,
@@ -1332,6 +1446,7 @@ def _plot_ranked_this_study_kind_panel(
     model_tick_labelsize: float = MANUSCRIPT_MODEL_TICK_LABEL_SIZE,
     group_label_fontsize: float = MANUSCRIPT_GROUP_LABEL_SIZE,
     annotation_fontsize: float = MANUSCRIPT_ANNOTATION_SIZE,
+    show_quartile_interval: bool = True,
 ) -> None:
     kind_state = state[kind]
     columns_all = kind_state["columns_all"]
@@ -1393,6 +1508,7 @@ def _plot_ranked_this_study_kind_panel(
         lw=edge_lw_default,
         alpha=1.0,
         bw_method=0.25,
+        show_quartile_interval=show_quartile_interval,
     )
     vp10 = _draw_violin(
         ax,
@@ -1404,11 +1520,17 @@ def _plot_ranked_this_study_kind_panel(
         lw=edge_lw_default,
         alpha=1.0,
         bw_method=0.25,
+        show_quartile_interval=show_quartile_interval,
     )
 
     def _selected_index_set(rank_pcts: Sequence[tuple[str, float]], phase_type: str, idx_shift: int) -> set[int]:
         selected = set()
-        selected_ranks = _selected_rank_set_from_topk(rank_pcts, threshold=selection_threshold)
+        selected_ranks = _selected_rank_set_from_topk(
+            rank_pcts,
+            threshold=selection_threshold,
+            model_selection_mode=model_selection_mode,
+            cumulative_threshold=cumulative_selection_threshold,
+        )
         cols_local = kind_state["columns"][phase_type]
         for rank_i, (model_name, _) in enumerate(rank_pcts):
             if rank_i not in selected_ranks:
@@ -1478,7 +1600,12 @@ def _plot_ranked_this_study_kind_panel(
         data_all: Sequence[np.ndarray],
         bg_color: str,
     ) -> None:
-        selected_ranks = _selected_rank_set_from_topk(rank_pcts, threshold=selection_threshold)
+        selected_ranks = _selected_rank_set_from_topk(
+            rank_pcts,
+            threshold=selection_threshold,
+            model_selection_mode=model_selection_mode,
+            cumulative_threshold=cumulative_selection_threshold,
+        )
         for rank_i, (model_name, _) in enumerate(rank_pcts):
             if rank_i not in selected_ranks:
                 continue
@@ -1780,6 +1907,18 @@ def _add_category_and_type_bands(
     category_y: float = 1.04,
     type_y: float = 0.985,
 ) -> None:
+    x_positions = np.asarray(x_positions, dtype=float)
+    if len(methods) == 0 or x_positions.size == 0:
+        return
+
+    # Use midpoints between adjacent columns so non-uniform column spacing keeps
+    # group separators aligned with the plotted data.
+    block_edges = np.empty(x_positions.size + 1, dtype=float)
+    block_edges[0] = x_positions[0] - 0.5
+    block_edges[-1] = x_positions[-1] + 0.5
+    if x_positions.size > 1:
+        block_edges[1:-1] = 0.5 * (x_positions[:-1] + x_positions[1:])
+
     category_ranges = []
     start = 0
     for i in range(1, len(methods) + 1):
@@ -1788,8 +1927,8 @@ def _add_category_and_type_bands(
             start = i
 
     for j, (category, i0, i1) in enumerate(category_ranges):
-        x0 = x_positions[i0] - 0.5
-        x1 = x_positions[i1] + 0.5
+        x0 = block_edges[i0]
+        x1 = block_edges[i1 + 1]
         xc = 0.5 * (x0 + x1)
         ax.text(
             xc,
@@ -1814,8 +1953,8 @@ def _add_category_and_type_bands(
             start = i
 
     for _, method_type, i0, i1 in blocks:
-        x0 = x_positions[i0] - 0.5
-        x1 = x_positions[i1] + 0.5
+        x0 = block_edges[i0]
+        x1 = block_edges[i1 + 1]
         ax.axvspan(x0, x1, color="white", alpha=1.0, zorder=0)
         xc = 0.5 * (x0 + x1)
         ax.text(
@@ -1987,6 +2126,8 @@ def _build_this_study_columns_for_comparison(
     state: Mapping[str, Any],
     *,
     selection_threshold: float,
+    model_selection_mode: str,
+    cumulative_selection_threshold: float,
     use_model_abbreviations: bool = False,
 ) -> list[dict[str, Any]]:
     kind_state = state[kind]
@@ -2001,7 +2142,12 @@ def _build_this_study_columns_for_comparison(
                 kind_state["best_models"][year][phase_type],
             )
             overall_data = _remove_boxplot_outliers(overall_data)
-            models_to_plot = _pick_models_for_single_eruption(rank_pcts, threshold=selection_threshold)
+            models_to_plot = _pick_models_for_single_eruption(
+                rank_pcts,
+                threshold=selection_threshold,
+                model_selection_mode=model_selection_mode,
+                cumulative_threshold=cumulative_selection_threshold,
+            )
             rank_pct_map = {model_name: pct for model_name, pct in rank_pcts}
 
             for rank_i, model_name in enumerate(models_to_plot):
@@ -2160,6 +2306,7 @@ def _draw_literature_comparison_violin(
     median_linestyle: str = "-",
     median_width_frac: float = 0.24,
     median_filter_outliers: bool = True,
+    show_quartile_interval: bool = True,
 ) -> None:
     clean_values = np.asarray(values, dtype=float).ravel()
     clean_values = clean_values[np.isfinite(clean_values)]
@@ -2180,11 +2327,25 @@ def _draw_literature_comparison_violin(
                 alpha=alpha,
                 bw_method=0.25,
                 zorder=zorder,
+                show_quartile_interval=False,
             )
         except (ValueError, np.linalg.LinAlgError):
             vp = {}
         if "cmedians" in vp:
             vp["cmedians"].set_alpha(0.0)
+
+    if show_quartile_interval:
+        _redraw_violin_quartiles(
+            ax,
+            x_center,
+            clean_values,
+            width,
+            color="k",
+            lw=max(median_lw * 0.75, 1.05),
+            zorder=zorder + 0.42,
+            alpha=0.95,
+            filter_outliers=median_filter_outliers,
+        )
 
     _redraw_violin_median(
         ax,
@@ -2239,6 +2400,7 @@ def _plot_liquid_subcolumn_violins_on_literature_comparison(
     *,
     kind: str,
     annotation_fontsize: float,
+    show_quartile_interval: bool = True,
 ) -> None:
     if not subcolumns:
         return
@@ -2263,6 +2425,7 @@ def _plot_liquid_subcolumn_violins_on_literature_comparison(
             zorder=2.2,
             median_color="k",
             median_lw=1.2,
+            show_quartile_interval=show_quartile_interval,
         )
         phase_data[subcol["phase_name"]].append(np.asarray(subcol["data"], dtype=float))
         phase_positions[subcol["phase_name"]].append(float(sub_position))
@@ -2292,11 +2455,19 @@ def _plot_this_study_dual_violins_on_literature_comparison(
     kind: str,
     annotation_fontsize: float = MANUSCRIPT_ANNOTATION_SIZE,
     annotate_rmse: bool = True,
+    x_centers: Optional[Sequence[float]] = None,
+    show_quartile_interval: bool = True,
 ) -> None:
     if len(this_cols) == 0:
         return
 
-    x_centers = np.arange(1, len(this_cols) + 1)
+    if x_centers is None:
+        x_centers = np.arange(1, len(this_cols) + 1, dtype=float)
+    else:
+        x_centers = np.asarray(x_centers, dtype=float)
+        if x_centers.size != len(this_cols):
+            raise ValueError("x_centers must have the same length as this_cols.")
+
     for i, col in enumerate(this_cols):
         x_center = float(x_centers[i])
         if "subcolumns" in col:
@@ -2306,6 +2477,7 @@ def _plot_this_study_dual_violins_on_literature_comparison(
                 list(col["subcolumns"]),
                 kind=kind,
                 annotation_fontsize=annotation_fontsize,
+                show_quartile_interval=show_quartile_interval,
             )
             continue
 
@@ -2330,6 +2502,7 @@ def _plot_this_study_dual_violins_on_literature_comparison(
             median_lw=1.5,
             median_width_frac=0.34,
             median_filter_outliers=False,
+            show_quartile_interval=show_quartile_interval,
         )
         _draw_literature_comparison_violin(
             ax,
@@ -2345,6 +2518,7 @@ def _plot_this_study_dual_violins_on_literature_comparison(
             median_lw=1.5,
             median_width_frac=0.34,
             median_filter_outliers=False,
+            show_quartile_interval=show_quartile_interval,
         )
 
         if annotate_rmse:
@@ -2397,6 +2571,7 @@ def _draw_overall_selected_violin(
         alpha=0.18,
         bw_method=0.25,
         zorder=1.6,
+        show_quartile_interval=False,
     )
     if "cmedians" in vp:
         vp["cmedians"].set_alpha(0.0)
@@ -2522,6 +2697,8 @@ def _plot_ranked_literature_panel(
     literature_df: pd.DataFrame,
     *,
     selection_threshold: float,
+    model_selection_mode: str,
+    cumulative_selection_threshold: float,
     add_literature_legend: bool,
     pressure_ylim: Optional[tuple[float, float]] = None,
     temperature_ylim: Optional[tuple[float, float]] = None,
@@ -2546,11 +2723,15 @@ def _plot_ranked_literature_panel(
     literature_legend_bbox_to_anchor: tuple[float, float] = (0.58, 0.50),
     reservoir_label_x_offset: float = 0.95,
     reservoir_label_right_margin: float = 0.10,
+    this_study_x_spacing: float = 1.0,
+    show_quartile_interval: bool = True,
 ) -> None:
     this_cols = _build_this_study_columns_for_comparison(
         kind,
         state,
         selection_threshold=selection_threshold,
+        model_selection_mode=model_selection_mode,
+        cumulative_selection_threshold=cumulative_selection_threshold,
         use_model_abbreviations=use_model_abbreviations,
     )
     lit_methods = _group_literature_methods(
@@ -2562,10 +2743,18 @@ def _plot_ranked_literature_panel(
     )
 
     methods_all = _build_methods_for_bands(this_cols, lit_methods)
-    x_all = np.arange(1, len(methods_all) + 1)
+    n_this = len(this_cols)
+    if n_this > 0:
+        this_x = 1.0 + np.arange(n_this, dtype=float) * float(this_study_x_spacing)
+        lit_start = this_x[-1] + 1.0
+    else:
+        this_x = np.asarray([], dtype=float)
+        lit_start = 1.0
+    x_lit = lit_start + np.arange(len(lit_methods), dtype=float)
+    x_all = np.concatenate([this_x, x_lit])
     reservoir_label_x = None
     if kind == "P" and pressure_reservoir_bands:
-        reservoir_label_x = len(methods_all) + reservoir_label_x_offset
+        reservoir_label_x = (x_all[-1] if x_all.size else 0.5) + reservoir_label_x_offset
     _add_category_and_type_bands(
         ax,
         methods_all,
@@ -2583,17 +2772,17 @@ def _plot_ranked_literature_panel(
             label_x=reservoir_label_x,
         )
 
-    n_this = len(this_cols)
     if n_this > 0:
         _plot_this_study_dual_violins_on_literature_comparison(
             ax,
             this_cols,
             kind=kind,
             annotation_fontsize=annotation_fontsize,
+            x_centers=this_x,
+            show_quartile_interval=show_quartile_interval,
         )
 
     if len(lit_methods) > 0:
-        x_lit = np.arange(1, len(lit_methods) + 1) + n_this
         for i, method in enumerate(lit_methods):
             xi = x_lit[i]
             thermobarometer_text = _clean_str(method.get("thermobatometer"))
@@ -2647,7 +2836,7 @@ def _plot_ranked_literature_panel(
     x_right = (
         reservoir_label_x + reservoir_label_right_margin
         if reservoir_label_x is not None
-        else len(methods_all) + 0.5
+        else (x_all[-1] + 0.5 if x_all.size else 0.5)
     )
     ax.set_xlim(0.5, x_right)
     ax.set_xticks(x_all)
@@ -2763,24 +2952,30 @@ def _plot_ranked_literature_panel(
         )
 
 
-def _build_original_vs_hps_columns_for_comparison(
+def _build_original_vs_pre_2006_columns_for_comparison(
     kind: str,
     original_state: Mapping[str, Any],
-    hps_state: Mapping[str, Any],
+    pre_2006_state: Mapping[str, Any],
     *,
     selection_threshold: float,
+    model_selection_mode: str,
+    cumulative_selection_threshold: float,
     use_model_abbreviations: bool,
 ) -> list[dict[str, Any]]:
     columns: list[dict[str, Any]] = []
-    for category_label, state in (("Original", original_state), ("+HPS", hps_state)):
+    for category_label, state in (("Original", original_state), ("+pre-2006", pre_2006_state)):
         state_columns = _build_this_study_columns_for_comparison(
             kind,
             state,
             selection_threshold=selection_threshold,
+            model_selection_mode=model_selection_mode,
+            cumulative_selection_threshold=cumulative_selection_threshold,
             use_model_abbreviations=use_model_abbreviations,
         )
         for col in state_columns:
             if "subcolumns" in col:
+                continue
+            if col.get("type") != "cpx_liq":
                 continue
             col_copy = dict(col)
             col_copy["category"] = category_label
@@ -2788,25 +2983,30 @@ def _build_original_vs_hps_columns_for_comparison(
     return columns
 
 
-def _plot_original_vs_hps_kind_panel(
+def _plot_original_vs_pre_2006_kind_panel(
     ax: plt.Axes,
     kind: str,
     original_state: Mapping[str, Any],
-    hps_state: Mapping[str, Any],
+    pre_2006_state: Mapping[str, Any],
     *,
     selection_threshold: float,
+    model_selection_mode: str,
+    cumulative_selection_threshold: float,
     pressure_ylim: Optional[tuple[float, float]],
     temperature_ylim: Optional[tuple[float, float]],
     use_model_abbreviations: bool,
     tick_labelsize: float = MANUSCRIPT_THIS_STUDY_TICK_LABEL_SIZE,
     annotation_fontsize: float = MANUSCRIPT_THIS_STUDY_ANNOTATION_SIZE,
     y_axis_label_fontsize: float = MANUSCRIPT_THIS_STUDY_Y_AXIS_LABEL_SIZE,
+    show_quartile_interval: bool = True,
 ) -> None:
-    columns = _build_original_vs_hps_columns_for_comparison(
+    columns = _build_original_vs_pre_2006_columns_for_comparison(
         kind,
         original_state,
-        hps_state,
+        pre_2006_state,
         selection_threshold=selection_threshold,
+        model_selection_mode=model_selection_mode,
+        cumulative_selection_threshold=cumulative_selection_threshold,
         use_model_abbreviations=use_model_abbreviations,
     )
     x_centers = np.arange(1, len(columns) + 1, dtype=float)
@@ -2838,6 +3038,7 @@ def _plot_original_vs_hps_kind_panel(
             kind=kind,
             annotation_fontsize=annotation_fontsize,
             annotate_rmse=False,
+            show_quartile_interval=show_quartile_interval,
         )
 
     raw_xtick_labels = [col["label"] for col in columns]
@@ -2927,6 +3128,8 @@ def plot_ranked_thermobarometry_this_study(
     pressure_model_pool: Optional[Sequence[Any]] = None,
     temperature_model_pool: Optional[Sequence[Any]] = None,
     selection_threshold: float = 50.0,
+    model_selection_mode: str = "cumulative",
+    cumulative_selection_threshold: float = 90.0,
     pressure_ylim: Optional[tuple[float, float]] = None,
     pressure_ticks: Optional[Sequence[float]] = None,
     densities_kg_m3: Optional[Sequence[float]] = None,
@@ -2942,6 +3145,7 @@ def plot_ranked_thermobarometry_this_study(
     use_model_abbreviations: bool = False,
     tick_labelsize: float = MANUSCRIPT_THIS_STUDY_TICK_LABEL_SIZE,
     model_tick_labelsize: float = MANUSCRIPT_THIS_STUDY_MODEL_TICK_LABEL_SIZE,
+    show_quartile_interval: bool = True,
 ) -> tuple[plt.Figure, np.ndarray]:
     """
     Plot the notebook-style two-panel "this study" summary figure.
@@ -2959,8 +3163,13 @@ def plot_ranked_thermobarometry_this_study(
         Model objects used to draw uncertainty bands. Their ``model_name`` and
         ``uncertainty`` attributes are read when available.
     selection_threshold : float, default 50.0
-        If the top-ranked model frequency is above this percentage, only that
-        model is highlighted. Otherwise the top two are highlighted.
+        Threshold used by ``model_selection_mode="top1_or_top2"``. If the
+        top-ranked model frequency is above this percentage, only that model
+        is highlighted. Otherwise the top two are highlighted.
+    model_selection_mode : {"cumulative", "top1_or_top2"}, default "cumulative"
+        Strategy used to select favored models from the ranked frequency list.
+    cumulative_selection_threshold : float, default 90.0
+        Cumulative percentage target used by ``model_selection_mode="cumulative"``.
     pressure_ylim, pressure_ticks : optional
         Optional fixed pressure-axis limits/ticks for the pressure panel.
     subplot_hspace : float, optional
@@ -2994,6 +3203,8 @@ def plot_ranked_thermobarometry_this_study(
         "P",
         state,
         selection_threshold=selection_threshold,
+        model_selection_mode=model_selection_mode,
+        cumulative_selection_threshold=cumulative_selection_threshold,
         pressure_ylim=pressure_ylim,
         pressure_ticks=pressure_ticks,
         densities_kg_m3=densities_kg_m3,
@@ -3007,12 +3218,15 @@ def plot_ranked_thermobarometry_this_study(
         model_tick_labelsize=model_tick_labelsize,
         group_label_fontsize=MANUSCRIPT_THIS_STUDY_GROUP_LABEL_SIZE,
         annotation_fontsize=MANUSCRIPT_THIS_STUDY_ANNOTATION_SIZE,
+        show_quartile_interval=show_quartile_interval,
     )
     _plot_ranked_this_study_kind_panel(
         axes[1],
         "T",
         state,
         selection_threshold=selection_threshold,
+        model_selection_mode=model_selection_mode,
+        cumulative_selection_threshold=cumulative_selection_threshold,
         depth_tick_step=depth_tick_step,
         depth_max=depth_max,
         use_model_abbreviations=use_model_abbreviations,
@@ -3022,6 +3236,7 @@ def plot_ranked_thermobarometry_this_study(
         model_tick_labelsize=model_tick_labelsize,
         group_label_fontsize=MANUSCRIPT_THIS_STUDY_GROUP_LABEL_SIZE,
         annotation_fontsize=MANUSCRIPT_THIS_STUDY_ANNOTATION_SIZE,
+        show_quartile_interval=show_quartile_interval,
     )
 
     if add_legend:
@@ -3066,6 +3281,8 @@ def plot_ranked_thermobarometry_literature_comparison(
     temperature_model_pool: Optional[Sequence[Any]] = None,
     liquid_results: Optional[Mapping[str, Any]] = None,
     selection_threshold: float = 50.0,
+    model_selection_mode: str = "cumulative",
+    cumulative_selection_threshold: float = 90.0,
     pressure_ylim: Optional[tuple[float, float]] = None,
     temperature_ylim: Optional[tuple[float, float]] = (900, 1200),
     pressure_ticks: Optional[Sequence[float]] = None,
@@ -3087,6 +3304,8 @@ def plot_ranked_thermobarometry_literature_comparison(
     literature_model_tick_labelsize: float = MANUSCRIPT_MODEL_TICK_LABEL_SIZE,
     literature_reservoir_label_x_offset: float = 0.95,
     literature_reservoir_label_right_margin: float = 0.10,
+    literature_this_study_x_spacing: float = 1.0,
+    show_quartile_interval: bool = True,
 ) -> tuple[plt.Figure, np.ndarray]:
     """
     Plot the notebook-style two-panel "this study vs literature" comparison.
@@ -3131,6 +3350,8 @@ def plot_ranked_thermobarometry_literature_comparison(
         state,
         pressure_literature_df,
         selection_threshold=selection_threshold,
+        model_selection_mode=model_selection_mode,
+        cumulative_selection_threshold=cumulative_selection_threshold,
         add_literature_legend=add_literature_legend,
         pressure_ylim=pressure_ylim,
         pressure_ticks=pressure_ticks,
@@ -3146,6 +3367,8 @@ def plot_ranked_thermobarometry_literature_comparison(
         literature_legend_bbox_to_anchor=literature_legend_bbox_to_anchor,
         reservoir_label_x_offset=literature_reservoir_label_x_offset,
         reservoir_label_right_margin=literature_reservoir_label_right_margin,
+        this_study_x_spacing=literature_this_study_x_spacing,
+        show_quartile_interval=show_quartile_interval,
     )
     if include_temperature and temperature_literature_df is not None:
         _plot_ranked_literature_panel(
@@ -3154,12 +3377,16 @@ def plot_ranked_thermobarometry_literature_comparison(
             state,
             temperature_literature_df,
             selection_threshold=selection_threshold,
+            model_selection_mode=model_selection_mode,
+            cumulative_selection_threshold=cumulative_selection_threshold,
             add_literature_legend=False,
             temperature_ylim=temperature_ylim,
             depth_tick_step=depth_tick_step,
             depth_max=depth_max,
             use_model_abbreviations=use_model_abbreviations,
             model_tick_labelsize=literature_model_tick_labelsize,
+            this_study_x_spacing=literature_this_study_x_spacing,
+            show_quartile_interval=show_quartile_interval,
         )
 
     if panel_labels:
@@ -3172,30 +3399,32 @@ def plot_ranked_thermobarometry_literature_comparison(
     return fig, axes
 
 
-def plot_ranked_thermobarometry_original_vs_hps_comparison(
+def plot_ranked_thermobarometry_original_vs_pre_2006_comparison(
     original_cpx_only: Any,
     original_cpx_liq: Any,
-    hps_cpx_only: Any,
-    hps_cpx_liq: Any,
+    pre_2006_cpx_only: Any,
+    pre_2006_cpx_liq: Any,
     pressure_columns: Mapping[str, Sequence[str]],
     temperature_columns: Mapping[str, Sequence[str]],
     *,
     pressure_model_pool: Optional[Sequence[Any]] = None,
     temperature_model_pool: Optional[Sequence[Any]] = None,
     selection_threshold: float = 50.0,
+    model_selection_mode: str = "cumulative",
+    cumulative_selection_threshold: float = 80.0,
     pressure_ylim: Optional[tuple[float, float]] = (-1, 10),
     temperature_ylim: Optional[tuple[float, float]] = None,
     figsize: tuple[float, float] = (14.0, 11.0),
     panel_labels: tuple[str, ...] = ("(a)", "(b)"),
     save_path: Optional[str | Path] = None,
     use_model_abbreviations: bool = True,
+    show_quartile_interval: bool = True,
 ) -> tuple[plt.Figure, np.ndarray]:
     """
-    Plot a two-panel comparison of original and +HPS this-study results.
+    Plot a two-panel comparison of original and +pre-2006 cpx-liquid results.
 
-    Each panel has four x-axis groups: cpx-only original, cpx-only +HPS,
-    cpx-liq original, and cpx-liq +HPS. Each group contains 2006 and 2010
-    selected-model prediction distributions.
+    Each panel compares original and +pre-2006 clinopyroxene-liquid selected-model
+    prediction distributions for the 2006 and 2010 eruptions.
     """
     original_state = _build_ranked_thermobarometry_state(
         original_cpx_only,
@@ -3205,9 +3434,9 @@ def plot_ranked_thermobarometry_original_vs_hps_comparison(
         pressure_model_pool=pressure_model_pool,
         temperature_model_pool=temperature_model_pool,
     )
-    hps_state = _build_ranked_thermobarometry_state(
-        hps_cpx_only,
-        hps_cpx_liq,
+    pre_2006_state = _build_ranked_thermobarometry_state(
+        pre_2006_cpx_only,
+        pre_2006_cpx_liq,
         pressure_columns,
         temperature_columns,
         pressure_model_pool=pressure_model_pool,
@@ -3218,57 +3447,50 @@ def plot_ranked_thermobarometry_original_vs_hps_comparison(
     fig.set_constrained_layout_pads(hspace=0.14)
     axes = np.asarray(axes_obj)
 
-    _plot_original_vs_hps_kind_panel(
+    _plot_original_vs_pre_2006_kind_panel(
         axes[0],
         "P",
         original_state,
-        hps_state,
+        pre_2006_state,
         selection_threshold=selection_threshold,
+        model_selection_mode=model_selection_mode,
+        cumulative_selection_threshold=cumulative_selection_threshold,
         pressure_ylim=pressure_ylim,
         temperature_ylim=temperature_ylim,
         use_model_abbreviations=use_model_abbreviations,
+        show_quartile_interval=show_quartile_interval,
     )
-    _plot_original_vs_hps_kind_panel(
+    _plot_original_vs_pre_2006_kind_panel(
         axes[1],
         "T",
         original_state,
-        hps_state,
+        pre_2006_state,
         selection_threshold=selection_threshold,
+        model_selection_mode=model_selection_mode,
+        cumulative_selection_threshold=cumulative_selection_threshold,
         pressure_ylim=pressure_ylim,
         temperature_ylim=temperature_ylim,
         use_model_abbreviations=use_model_abbreviations,
+        show_quartile_interval=show_quartile_interval,
     )
 
+    year_2006_handle = (
+        Patch(facecolor="blue", alpha=0.55),
+        Line2D([0], [0], color="blue", lw=2.2, alpha=1.0),
+    )
+    year_2010_handle = (
+        Patch(facecolor="red", alpha=0.55),
+        Line2D([0], [0], color="red", lw=2.2, alpha=1.0),
+    )
     legend_items = [
-        Line2D(
-            [0],
-            [0],
-            color="blue",
-            lw=2.2,
-            marker="s",
-            markersize=7.5,
-            markerfacecolor="blue",
-            markeredgecolor="blue",
-            alpha=0.85,
-            label="2006",
-        ),
-        Line2D(
-            [0],
-            [0],
-            color="red",
-            lw=2.2,
-            marker="s",
-            markersize=7.5,
-            markerfacecolor="red",
-            markeredgecolor="red",
-            alpha=0.85,
-            label="2010",
-        ),
-        Patch(facecolor="0.60", edgecolor="0.25", alpha=0.55, label="Filled violin: all valid samples"),
-        Patch(facecolor="none", edgecolor="0.25", linewidth=1.4, label="Open violin: favored samples"),
+        year_2006_handle,
+        year_2010_handle,
+        Patch(facecolor="0.60", edgecolor="0.25", alpha=0.55),
+        Patch(facecolor="none", edgecolor="0.25", linewidth=1.4),
     ]
     axes[0].legend(
         handles=legend_items,
+        labels=["2006", "2010", "all samples", "favored subset"],
         loc="upper left",
         bbox_to_anchor=(0.01, 0.25),
         frameon=True,
@@ -3279,6 +3501,7 @@ def plot_ranked_thermobarometry_original_vs_hps_comparison(
         handlelength=2.1,
         handletextpad=0.5,
         labelspacing=0.25,
+        handler_map={tuple: HandlerTuple(ndivide=None)},
     )
 
     if panel_labels:
@@ -3319,6 +3542,8 @@ def plot_ranked_thermobarometry_summary(
     temperature_literature: Any = None,
     liquid_results: Optional[Mapping[str, Any]] = None,
     selection_threshold: float = 50.0,
+    model_selection_mode: str = "cumulative",
+    cumulative_selection_threshold: float = 80.0,
     pressure_ylim: Optional[tuple[float, float]] = None,
     temperature_ylim: Optional[tuple[float, float]] = (900, 1150),
     pressure_ticks: Optional[Sequence[float]] = None,
@@ -3344,12 +3569,20 @@ def plot_ranked_thermobarometry_summary(
     literature_model_tick_labelsize: Optional[float] = None,
     literature_reservoir_label_x_offset: float = 0.95,
     literature_reservoir_label_right_margin: float = 0.10,
+    literature_this_study_x_spacing: float = 1.0,
+    show_quartile_interval: bool = True,
 ) -> dict[str, tuple[plt.Figure, np.ndarray]]:
     """
     Convenience wrapper that reproduces both notebook summary figures.
 
     Parameters
     ----------
+    selection_threshold : float, default 50.0
+        Threshold used by ``model_selection_mode="top1_or_top2"``.
+    model_selection_mode : {"cumulative", "top1_or_top2"}, default "cumulative"
+        Strategy used by both summary figures to select favored models.
+    cumulative_selection_threshold : float, default 90.0
+        Cumulative percentage target used by ``model_selection_mode="cumulative"``.
     show : bool, default True
         Whether to display the generated figures before returning them.
 
@@ -3375,6 +3608,8 @@ def plot_ranked_thermobarometry_summary(
             pressure_model_pool=pressure_model_pool,
             temperature_model_pool=temperature_model_pool,
             selection_threshold=selection_threshold,
+            model_selection_mode=model_selection_mode,
+            cumulative_selection_threshold=cumulative_selection_threshold,
             pressure_ylim=pressure_ylim,
             pressure_ticks=pressure_ticks,
             densities_kg_m3=densities_kg_m3,
@@ -3387,6 +3622,7 @@ def plot_ranked_thermobarometry_summary(
             use_model_abbreviations=use_model_abbreviations,
             tick_labelsize=this_study_tick_labelsize,
             model_tick_labelsize=this_study_model_tick_labelsize,
+            show_quartile_interval=show_quartile_interval,
         )
     }
 
@@ -3402,6 +3638,8 @@ def plot_ranked_thermobarometry_summary(
             temperature_model_pool=temperature_model_pool,
             liquid_results=liquid_results,
             selection_threshold=selection_threshold,
+            model_selection_mode=model_selection_mode,
+            cumulative_selection_threshold=cumulative_selection_threshold,
             pressure_ylim=pressure_ylim,
             temperature_ylim=temperature_ylim,
             pressure_ticks=pressure_ticks,
@@ -3421,6 +3659,8 @@ def plot_ranked_thermobarometry_summary(
             literature_model_tick_labelsize=literature_model_tick_labelsize,
             literature_reservoir_label_x_offset=literature_reservoir_label_x_offset,
             literature_reservoir_label_right_margin=literature_reservoir_label_right_margin,
+            literature_this_study_x_spacing=literature_this_study_x_spacing,
+            show_quartile_interval=show_quartile_interval,
         )
 
     if show:
