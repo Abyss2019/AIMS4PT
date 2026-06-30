@@ -8,8 +8,10 @@ from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
 import matplotlib.pyplot as plt
+from matplotlib.colors import to_rgb
 from matplotlib.lines import Line2D
 from matplotlib.legend_handler import HandlerTuple
+import matplotlib.patheffects as pe
 from matplotlib.patches import Patch
 from matplotlib.ticker import AutoMinorLocator, FixedLocator, NullLocator
 from matplotlib.transforms import blended_transform_factory
@@ -21,11 +23,11 @@ from aims4pt.toolkit_utils import wrap_text
 
 MERAPI_2006_COLOR = "#3995d6"
 MERAPI_2010_COLOR = "#f15454"
-MERAPI_PRE_2006_COLOR = "#7b3294"
+MERAPI_PRE_2006_COLOR = "#f0c808"
 INDEPENDENT_EXPERIMENTAL_COLOR = "0.62"
 MERAPI_YEAR_COLORS = {"2006": MERAPI_2006_COLOR, "2010": MERAPI_2010_COLOR}
-MERAPI_CIRCLE_SIZES = {"2006": 36, "2010": 46}
-MERAPI_LEGEND_CIRCLE_SIZES = {"2006": 7, "2010": 8}
+MERAPI_CIRCLE_SIZES = {"2006": 30, "2010": 38}
+MERAPI_LEGEND_CIRCLE_SIZES = {"2006": 6.4, "2010": 7.2}
 MOLAR_MASS_MGO = 40.3044
 MOLAR_MASS_FEO = 71.844
 
@@ -56,6 +58,13 @@ def _add_merapi_plot_columns(df: pd.DataFrame) -> pd.DataFrame:
     if "Na2O_liq" in out.columns and "K2O_liq" in out.columns:
         out["TotalAlkali_liq"] = _series_numeric(out, "Na2O_liq") + _series_numeric(out, "K2O_liq")
     return _add_mg_number_columns(out)
+
+
+def _blend_color(color: str, target: str, amount: float) -> tuple[float, float, float]:
+    """Blend a Matplotlib color toward a target color."""
+    source_rgb = np.array(to_rgb(color), dtype=float)
+    target_rgb = np.array(to_rgb(target), dtype=float)
+    return tuple(source_rgb * (1.0 - amount) + target_rgb * amount)
 
 
 def _merapi_pair_frame(cpx_df: pd.DataFrame, liq_df: pd.DataFrame) -> pd.DataFrame:
@@ -104,6 +113,146 @@ def _drop_duplicate_pre_2006_liquid_rows(liquid_df: pd.DataFrame) -> pd.DataFram
         return liquid_df
     return liquid_df.loc[~duplicate_mask].reset_index(drop=True)
 
+def _find_liquid_metadata_col(df: pd.DataFrame, name: str) -> Optional[str]:
+    """Return a pairing metadata column, allowing repeated liq__ prefixes."""
+    candidates = [name, f"liq__{name}", f"liq__liq__{name}", f"liq__liq__liq__{name}"]
+    for candidate in candidates:
+        if candidate in df.columns:
+            return candidate
+    suffix = f"__{name}"
+    matches = [col for col in df.columns if str(col).endswith(suffix)]
+    return matches[0] if matches else None
+
+
+def _liquid_group_source_col(liq_df: pd.DataFrame) -> str:
+    group_col = next((col for col in ["glass/bulk", "glass_bulk", "liquid_group"] if col in liq_df.columns), None)
+    if group_col is None:
+        raise KeyError("Merapi liquid endmember table must contain a glass/bulk group column.")
+    return group_col
+
+
+def _liquid_endmember_subsets(liq_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Return bulk and glass endmember pools in the same positional order used by pairing."""
+    group_col = _liquid_group_source_col(liq_df)
+    group = liq_df[group_col].astype(str).str.lower().str.strip()
+    bulk = liq_df.loc[group.isin(["bulk", "whole rock", "whole-rock"])].reset_index(drop=True)
+    glass = liq_df.loc[group.eq("glass")].reset_index(drop=True)
+    return bulk, glass
+
+
+def _valid_positional_indices(values: pd.Series, upper_bound: int) -> np.ndarray:
+    idx = pd.to_numeric(values, errors="coerce").dropna().astype(int).to_numpy()
+    idx = idx[(idx >= 0) & (idx < upper_bound)]
+    return np.unique(idx)
+
+
+def _pre_2006_liquid_mask(rows: pd.DataFrame) -> pd.Series:
+    """Return rows whose original liquid eruption label is pre-2006."""
+    eruption_col = next((col for col in ["Eruption", "eruption", "eruption_year"] if col in rows.columns), None)
+    if eruption_col is None:
+        return pd.Series(False, index=rows.index)
+    return rows[eruption_col].astype(str).str.strip().str.casefold().eq("pre-2006")
+
+
+def _frame_liquid_endmembers_for_plot(rows: pd.DataFrame, year: str, group: str) -> pd.DataFrame:
+    if rows.empty:
+        return pd.DataFrame()
+    eruption_year = pd.Series(str(year), index=rows.index, dtype=object)
+    liquid_group = pd.Series(group, index=rows.index, dtype=object)
+    if group == "whole-rock endmember":
+        pre_2006_mask = _pre_2006_liquid_mask(rows)
+        eruption_year = eruption_year.where(~pre_2006_mask, "pre-2006")
+        liquid_group = liquid_group.where(~pre_2006_mask, "whole-rock (pre-2006)")
+    out = rows.copy().add_suffix("_liq")
+    out["eruption_year"] = eruption_year.to_numpy()
+    out["liquid_group"] = liquid_group.to_numpy()
+    return _add_merapi_plot_columns(out)
+
+
+def _used_liquid_endmember_frame(liq_df: pd.DataFrame, paired_liq_df: pd.DataFrame, year: str) -> pd.DataFrame:
+    """Return only bulk/glass endmembers used by final accepted synthetic liquids."""
+    bulk_idx_col = _find_liquid_metadata_col(paired_liq_df, "endmember1_idx")
+    glass_idx_col = _find_liquid_metadata_col(paired_liq_df, "endmember2_idx")
+    if bulk_idx_col is None or glass_idx_col is None:
+        return _liquid_endmember_frame(liq_df, year)
+
+    bulk, glass = _liquid_endmember_subsets(liq_df)
+    bulk_idx = _valid_positional_indices(paired_liq_df[bulk_idx_col], len(bulk))
+    glass_idx = _valid_positional_indices(paired_liq_df[glass_idx_col], len(glass))
+    frames = [
+        _frame_liquid_endmembers_for_plot(bulk.iloc[bulk_idx], year, "whole-rock endmember"),
+        _frame_liquid_endmembers_for_plot(glass.iloc[glass_idx], year, "glass endmember"),
+    ]
+    frames = [frame for frame in frames if not frame.empty]
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
+
+
+def _liquid_numeric_mix_columns(bulk: pd.DataFrame, glass: pd.DataFrame) -> list[str]:
+    cols = []
+    for col in bulk.columns.intersection(glass.columns):
+        if col in {"Eruption", "eruption", "eruption_year", "glass/bulk", "glass_bulk", "liquid_group"}:
+            continue
+        bulk_values = pd.to_numeric(bulk[col], errors="coerce")
+        glass_values = pd.to_numeric(glass[col], errors="coerce")
+        if bulk_values.notna().any() and glass_values.notna().any():
+            cols.append(col)
+    return cols
+
+
+def _liquid_mix_path_frame(
+    liq_df: pd.DataFrame,
+    paired_liq_df: pd.DataFrame,
+    year: str,
+    *,
+    n_points: int = 15,
+) -> pd.DataFrame:
+    """Return points along each accepted bulk-glass synthetic mixing path."""
+    bulk_idx_col = _find_liquid_metadata_col(paired_liq_df, "endmember1_idx")
+    glass_idx_col = _find_liquid_metadata_col(paired_liq_df, "endmember2_idx")
+    if bulk_idx_col is None or glass_idx_col is None:
+        return pd.DataFrame()
+
+    bulk, glass = _liquid_endmember_subsets(liq_df)
+    if bulk.empty or glass.empty:
+        return pd.DataFrame()
+    mix_cols = _liquid_numeric_mix_columns(bulk, glass)
+    if not mix_cols:
+        return pd.DataFrame()
+
+    pair_df = paired_liq_df[[bulk_idx_col, glass_idx_col]].copy()
+    pair_df[bulk_idx_col] = pd.to_numeric(pair_df[bulk_idx_col], errors="coerce")
+    pair_df[glass_idx_col] = pd.to_numeric(pair_df[glass_idx_col], errors="coerce")
+    pair_df = pair_df.dropna().astype(int).drop_duplicates()
+    pair_df = pair_df[
+        pair_df[bulk_idx_col].between(0, len(bulk) - 1)
+        & pair_df[glass_idx_col].between(0, len(glass) - 1)
+    ]
+    if pair_df.empty:
+        return pd.DataFrame()
+
+    rows: list[dict[str, float]] = []
+    f_values = np.linspace(0.0, 1.0, n_points)
+    for path_id, (bulk_idx, glass_idx) in enumerate(pair_df[[bulk_idx_col, glass_idx_col]].itertuples(index=False, name=None)):
+        bulk_row = pd.to_numeric(bulk.iloc[int(bulk_idx)][mix_cols], errors="coerce")
+        glass_row = pd.to_numeric(glass.iloc[int(glass_idx)][mix_cols], errors="coerce")
+        for f_value in f_values:
+            mixed = f_value * bulk_row + (1.0 - f_value) * glass_row
+            row = mixed.to_dict()
+            row["mixing_path_id"] = path_id
+            row["mix_f"] = f_value
+            rows.append(row)
+
+    if not rows:
+        return pd.DataFrame()
+    out = pd.DataFrame(rows).add_suffix("_liq")
+    out["mixing_path_id"] = out.pop("mixing_path_id_liq").astype(int)
+    out["mix_f"] = out.pop("mix_f_liq").astype(float)
+    out["eruption_year"] = str(year)
+    out["liquid_group"] = "mixing path"
+    return _add_merapi_plot_columns(out)
+
 
 def _finite_xy_frame(df: pd.DataFrame, x_col: str, y_col: str) -> pd.DataFrame:
     """Return finite x-y rows for plotting and KDE."""
@@ -151,8 +300,18 @@ def _kde_level_for_mass(z: np.ndarray, mass: float) -> float:
     return float(sorted_z[idx])
 
 
-def _draw_kde_mass_contours(ax, df: pd.DataFrame, x_col: str, y_col: str, xlim, ylim):
-    """Draw independent-data KDE contours enclosing about 50, 80, 95, and 98% mass."""
+def _draw_kde_mass_contours(
+    ax,
+    df: pd.DataFrame,
+    x_col: str,
+    y_col: str,
+    xlim,
+    ylim,
+    *,
+    label_positions: Mapping[str, tuple[float, ...]] | None = None,
+    label_fontsize: float = 9.5,
+):
+    """Draw solid KDE contours enclosing selected cumulative probability masses."""
     from scipy.stats import gaussian_kde
 
     x, y = _finite_xy(df, x_col, y_col)
@@ -164,13 +323,45 @@ def _draw_kde_mass_contours(ax, df: pd.DataFrame, x_col: str, y_col: str, xlim, 
     except np.linalg.LinAlgError:
         return
 
-    solid_levels = np.unique(np.sort([_kde_level_for_mass(zz, mass) for mass in (0.95, 0.80, 0.50)]))
-    solid_levels = solid_levels[np.isfinite(solid_levels)]
-    if len(solid_levels):
-        ax.contour(xx, yy, zz, levels=solid_levels, colors="0.48", linewidths=0.95, zorder=1)
-    broad_level = _kde_level_for_mass(zz, 0.98)
-    if np.isfinite(broad_level):
-        ax.contour(xx, yy, zz, levels=[broad_level], colors="0.68", linewidths=0.80, linestyles="--", zorder=1)
+    sigma_masses = [("95.4%", 0.954), ("68.3%", 0.683)]
+    level_items = []
+    for label, mass in sigma_masses:
+        level = _kde_level_for_mass(zz, mass)
+        if np.isfinite(level):
+            level_items.append((level, label))
+    if not level_items:
+        return
+
+    level_items = sorted(level_items, key=lambda item: item[0])
+    unique_items = []
+    for level, label in level_items:
+        if not unique_items or not np.isclose(level, unique_items[-1][0]):
+            unique_items.append((level, label))
+    levels = [item[0] for item in unique_items]
+    fmt = {level: label for level, label in unique_items}
+    if label_positions:
+        ax.contour(xx, yy, zz, levels=levels, colors="0.40", linewidths=0.95, linestyles="-", zorder=1)
+        for _, label in unique_items:
+            position = label_positions.get(label)
+            if position is None:
+                continue
+            x_text, y_text = position[:2]
+            rotation = position[2] if len(position) > 2 else 0.0
+            ax.text(
+                x_text,
+                y_text,
+                label,
+                fontsize=label_fontsize,
+                color="0.25",
+                rotation=rotation,
+                ha="center",
+                va="center",
+                bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.72, "pad": 0.3},
+                zorder=7,
+            )
+        return
+    contour = ax.contour(xx, yy, zz, levels=levels, colors="0.40", linewidths=0.95, linestyles="-", zorder=1)
+    ax.clabel(contour, levels=levels, fmt=fmt, inline=True, fontsize=label_fontsize, colors="0.25")
 
 
 def _plot_independent_background(ax, independent_df: pd.DataFrame, x_col: str, y_col: str):
@@ -209,59 +400,114 @@ def _plot_cpx_points(ax, merapi_2006_df: pd.DataFrame, merapi_2010_df: pd.DataFr
 
 
 LIQUID_GROUP_STYLES = {
-    "whole-rock endmember": {"marker": "s", "size": 62, "filled": True},
-    "whole-rock (pre-2006)": {"marker": "s", "size": 62, "filled": True, "facecolor": MERAPI_PRE_2006_COLOR},
-    "glass endmember": {"marker": "^", "size": 62, "filled": True},
-    "equilibrium liquid": {"marker": "o", "size": 36, "filled": True},
+    "mixing path": {
+        "marker": "o",
+        "size": 4.8,
+        "filled": True,
+        "edgecolor": "none",
+        "alpha": 0.52,
+        "linewidth": 0.7,
+        "color_blend": ("white", 0.34),
+    },
+    "whole-rock endmember": {"marker": "s", "size": 70, "filled": True, "edgecolor": "black", "alpha": 0.96},
+    "whole-rock (pre-2006)": {
+        "marker": "s",
+        "size": 70,
+        "filled": True,
+        "facecolor": MERAPI_PRE_2006_COLOR,
+        "edgecolor": "black",
+        "alpha": 0.96,
+    },
+    "glass endmember": {"marker": "^", "size": 58, "filled": True, "edgecolor": "black", "alpha": 0.96},
+    "equilibrium liquid": {
+        "marker": "x",
+        "size": 22,
+        "filled": False,
+        "linewidth": 0.8,
+        "alpha": 1.0,
+        "color_blend": ("black", 0.32),
+    },
 }
 
 
-def _plot_liquid_groups(ax, liquid_df: pd.DataFrame, x_col: str, y_col: str):
-    """Plot Merapi liquids with year encoded by color and liquid group by marker/fill."""
+def _liquid_group_color(year: str, style: Mapping[str, Any]) -> str | tuple[float, float, float]:
+    """Return the plotted color for a liquid role and eruption year."""
+    color = style.get("facecolor", MERAPI_YEAR_COLORS.get(year, MERAPI_PRE_2006_COLOR))
+    if "color_blend" not in style:
+        return color
+    target, amount = style["color_blend"]
+    return _blend_color(color, target, amount)
+
+
+def _plot_liquid_groups(
+    ax,
+    liquid_df: pd.DataFrame,
+    x_col: str,
+    y_col: str,
+    *,
+    mixing_path_display: str = "points",
+):
+    """Plot Merapi liquids with year encoded by color and liquid role by marker."""
     layer_order = [
-        ("2010", "whole-rock endmember", 4),
-        ("2006", "whole-rock endmember", 5),
-        ("pre-2006", "whole-rock (pre-2006)", 5.5),
-        ("2010", "glass endmember", 4),
-        ("2006", "glass endmember", 5),
-        ("2010", "equilibrium liquid", 6),
-        ("2006", "equilibrium liquid", 7),
+        ("2010", "mixing path", 3.0),
+        ("2006", "mixing path", 3.1),
+        ("2010", "whole-rock endmember", 5.0),
+        ("2006", "whole-rock endmember", 5.1),
+        ("pre-2006", "whole-rock (pre-2006)", 5.2),
+        ("2010", "glass endmember", 5.3),
+        ("2006", "glass endmember", 5.4),
+        ("2010", "equilibrium liquid", 6.1),
+        ("2006", "equilibrium liquid", 6.2),
     ]
     for year, group, zorder in layer_order:
         style = LIQUID_GROUP_STYLES[group]
-        color = style.get("facecolor", MERAPI_YEAR_COLORS.get(year, "0.45"))
+        color = _liquid_group_color(year, style)
         data = liquid_df[
             liquid_df["eruption_year"].astype(str).eq(year)
             & liquid_df["liquid_group"].astype(str).eq(group)
         ]
         if data.empty:
             continue
+        if group == "mixing path" and mixing_path_display == "curves" and "mixing_path_id" in data.columns:
+            for _, path_data in data.groupby("mixing_path_id", sort=False):
+                path_data = path_data.sort_values("mix_f") if "mix_f" in path_data.columns else path_data
+                xy = _finite_xy_frame(path_data, x_col, y_col)
+                if len(xy) < 2:
+                    continue
+                ax.plot(
+                    xy[x_col].to_numpy(dtype=float),
+                    xy[y_col].to_numpy(dtype=float),
+                    color=color,
+                    linewidth=style.get("linewidth", 0.7),
+                    alpha=style.get("alpha", 0.34),
+                    zorder=zorder,
+                )
+            continue
         x, y = _finite_xy(data, x_col, y_col)
-        if style["filled"]:
-            is_equilibrium_liquid = group == "equilibrium liquid"
+        marker = style["marker"]
+        if marker in {"x", "+"}:
             ax.scatter(
                 x,
                 y,
-                marker=style["marker"],
-                s=MERAPI_CIRCLE_SIZES[year] if is_equilibrium_liquid else style["size"],
-                facecolors=color,
-                edgecolors="0.15" if is_equilibrium_liquid else "black",
-                linewidths=0.45 if is_equilibrium_liquid else 0.95,
-                alpha=0.92 if is_equilibrium_liquid else 0.88,
-                zorder=zorder,
-            )
-        else:
-            ax.scatter(
-                x,
-                y,
-                marker=style["marker"],
+                marker=marker,
                 s=style["size"],
-                facecolors="none",
-                edgecolors=color,
-                linewidths=1.25,
-                alpha=0.98,
+                color=color,
+                linewidths=style.get("linewidth", 0.85),
+                alpha=style.get("alpha", 0.98),
                 zorder=zorder,
             )
+            continue
+        ax.scatter(
+            x,
+            y,
+            marker=marker,
+            s=style["size"],
+            facecolors=color,
+            edgecolors=style.get("edgecolor", "black"),
+            linewidths=style.get("linewidth", 0.55 if group == "mixing path" else 0.95),
+            alpha=style.get("alpha", 0.9),
+            zorder=zorder,
+        )
 
 
 def _add_top_merapi_legend(fig):
@@ -286,27 +532,83 @@ def _add_top_merapi_legend(fig):
     )
 
 
-def _add_liquid_group_legend(ax, loc="upper right", bbox_to_anchor=None):
-    """Add a local liquid-group legend to a liquid composition panel."""
+def _add_liquid_group_legend(ax, loc="upper right", bbox_to_anchor=None, *, mixing_path_display: str = "points"):
+    """Add a local liquid-role legend to a liquid composition panel."""
     from matplotlib.lines import Line2D
 
+    def group_color(year: str, group: str) -> str | tuple[float, float, float]:
+        return _liquid_group_color(year, LIQUID_GROUP_STYLES[group])
+
+    def year_tuple(marker: str, *, size: float, fill: bool = True, lw: float = 0.9, group: str | None = None):
+        handles = []
+        for year in ("2006", "2010"):
+            color = group_color(year, group) if group is not None else MERAPI_YEAR_COLORS[year]
+            if marker in {"x", "+"}:
+                handles.append(
+                    Line2D([0], [0], marker=marker, color=color, linestyle="None", markeredgewidth=lw, markersize=size)
+                )
+            else:
+                handles.append(
+                    Line2D(
+                        [0], [0],
+                        marker=marker,
+                        color="none",
+                        markerfacecolor=color if fill else "none",
+                        markeredgecolor="black" if fill else color,
+                        markeredgewidth=lw,
+                        markersize=size,
+                    )
+                )
+        return tuple(handles)
+
+    def mixing_path_tuple():
+        return tuple(
+            Line2D(
+                [0.0, 1.0],
+                [0.0, 0.0],
+                color=group_color(year, "mixing path"),
+                linewidth=1.1,
+                alpha=0.7,
+            )
+            for year in ("2006", "2010")
+        )
+
     handles = [
-        Line2D([0], [0], marker="s", color="none", markerfacecolor="0.75", markeredgecolor="black", markeredgewidth=0.95, markersize=6.1, label="whole-rock endmember"),
-        Line2D([0], [0], marker="s", color="none", markerfacecolor=MERAPI_PRE_2006_COLOR, markeredgecolor="black", markeredgewidth=0.95, markersize=6.1, label="whole-rock (pre-2006)"),
-        Line2D([0], [0], marker="^", color="none", markerfacecolor="0.75", markeredgecolor="black", markeredgewidth=0.95, markersize=6.1, label="glass endmember"),
-        Line2D([0], [0], marker="o", color="none", markerfacecolor="0.45", markeredgecolor="0.15", markeredgewidth=0.45, markersize=5.6, label="equilibrium liquid"),
+        year_tuple("s", size=6.8, fill=True, lw=0.95),
+        Line2D(
+            [0],
+            [0],
+            marker="s",
+            color="none",
+            markerfacecolor=MERAPI_PRE_2006_COLOR,
+            markeredgecolor="black",
+            markeredgewidth=0.95,
+            markersize=6.8,
+        ),
+        year_tuple("^", size=6.2, fill=True, lw=0.95),
+        mixing_path_tuple() if mixing_path_display == "curves" else year_tuple("o", size=2.9, fill=True, lw=0.0, group="mixing path"),
+        year_tuple("x", size=4.9, fill=False, lw=0.8, group="equilibrium liquid"),
+    ]
+    labels = [
+        "whole-rock endmember",
+        "whole-rock (pre-2006)",
+        "glass endmember",
+        "bulk-glass mixing path",
+        "equilibrium liquid",
     ]
     ax.legend(
         handles=handles,
+        labels=labels,
         loc=loc,
         bbox_to_anchor=bbox_to_anchor,
         frameon=True,
         fontsize=7.5,
-        handlelength=1.0,
-        handletextpad=0.35,
-        labelspacing=0.2,
+        handlelength=1.6,
+        handletextpad=0.45,
+        labelspacing=0.25,
         borderpad=0.25,
         borderaxespad=0.25,
+        handler_map={tuple: HandlerTuple(ndivide=None)},
     )
 
 
@@ -319,6 +621,7 @@ def _draw_merapi_composition_panel(
     merapi_liquid_points: pd.DataFrame,
     xlim_override=None,
     ylim_override=None,
+    mixing_path_display: str = "points",
 ):
     """Draw one Merapi composition comparison panel."""
     x_col = spec["x_col"]
@@ -330,14 +633,24 @@ def _draw_merapi_composition_panel(
     )
     xlim_for_kde = xlim_override or xlim_auto
     ylim_for_kde = ylim_override or ylim_auto
-    _draw_kde_mass_contours(ax, independent_pairs, x_col, y_col, xlim_for_kde, ylim_for_kde)
+    _draw_kde_mass_contours(
+        ax,
+        independent_pairs,
+        x_col,
+        y_col,
+        xlim_for_kde,
+        ylim_for_kde,
+        label_positions=spec.get("kde_label_positions"),
+        label_fontsize=spec.get("kde_label_fontsize", 9.5),
+    )
     _plot_independent_background(ax, independent_pairs, x_col, y_col)
     if spec["kind"] == "liquid":
-        _plot_liquid_groups(ax, merapi_liquid_points, x_col, y_col)
+        _plot_liquid_groups(ax, merapi_liquid_points, x_col, y_col, mixing_path_display=mixing_path_display)
         _add_liquid_group_legend(
             ax,
             loc=spec.get("legend_loc", "upper right"),
             bbox_to_anchor=spec.get("legend_bbox"),
+            mixing_path_display=mixing_path_display,
         )
     else:
         _plot_cpx_points(ax, merapi_pairs_2006, merapi_pairs_2010, x_col, y_col)
@@ -366,9 +679,13 @@ def plot_merapi_composition_comparison(
     ylim_overrides: dict[str, tuple[float, float]] | None = None,
     figsize=(8.2, 7.2),
     dpi=300,
+    mixing_path_display: str = "points",
 ):
     """Plot Merapi cpx/liquid compositions against the independent experimental dataset."""
     import matplotlib.pyplot as plt
+
+    if mixing_path_display not in {"points", "curves"}:
+        raise ValueError("mixing_path_display must be either 'points' or 'curves'.")
 
     xlim_overrides = xlim_overrides or {}
     ylim_overrides = ylim_overrides or {}
@@ -379,15 +696,16 @@ def plot_merapi_composition_comparison(
     merapi_pairs_2010["eruption_year"] = "2010"
     merapi_pairs_2006["liquid_group"] = "equilibrium liquid"
     merapi_pairs_2010["liquid_group"] = "equilibrium liquid"
-    merapi_liquid_points = pd.concat(
-        [
-            _liquid_endmember_frame(liq_2006, "2006"),
-            _liquid_endmember_frame(liq_2010, "2010"),
-            merapi_pairs_2006,
-            merapi_pairs_2010,
-        ],
-        ignore_index=True,
-    )
+    liquid_frames = [
+        _used_liquid_endmember_frame(liq_2006, paired_liq_06_pass, "2006"),
+        _used_liquid_endmember_frame(liq_2010, paired_liq_10_pass, "2010"),
+        _liquid_mix_path_frame(liq_2006, paired_liq_06_pass, "2006"),
+        _liquid_mix_path_frame(liq_2010, paired_liq_10_pass, "2010"),
+        merapi_pairs_2006,
+        merapi_pairs_2010,
+    ]
+    liquid_frames = [frame for frame in liquid_frames if frame is not None and not frame.empty]
+    merapi_liquid_points = pd.concat(liquid_frames, ignore_index=True)
     merapi_liquid_points = _drop_duplicate_pre_2006_liquid_rows(merapi_liquid_points)
 
     panel_specs = [
@@ -399,6 +717,7 @@ def plot_merapi_composition_comparison(
             "y_col": "MgNumber_cpx",
             "xlabel": r"Clinopyroxene CaO (wt%)",
             "ylabel": r"Clinopyroxene Mg#",
+            "kde_label_positions": {"68.3%": (15.7, 0.96, -16), "95.4%": (3.9, 0.65, 0)},
         },
         {
             "key": "cpx_na_al",
@@ -409,6 +728,7 @@ def plot_merapi_composition_comparison(
             "xlabel": r"Clinopyroxene Na$_2$O (wt%)",
             "ylabel": r"Clinopyroxene Al$_2$O$_3$ (wt%)",
             "xlim": (0, 1.1),
+            "kde_label_positions": {"68.3%": (0.58, 6.8, -24), "95.4%": (0.78, 4.8, 28)},
         },
         {
             "key": "liquid_tas",
@@ -419,6 +739,7 @@ def plot_merapi_composition_comparison(
             "xlabel": r"Liquid SiO$_2$ (wt%)",
             "ylabel": r"Liquid Na$_2$O + K$_2$O (wt%)",
             "legend_loc": "lower right",
+            "kde_label_positions": {"68.3%": (73.5, 8.25, 12), "95.4%": (75.0, 10.2, 0)},
         },
         {
             "key": "liquid_sio2_mg_number",
@@ -428,6 +749,7 @@ def plot_merapi_composition_comparison(
             "y_col": "MgNumber_liq",
             "xlabel": r"Liquid SiO$_2$ (wt%)",
             "ylabel": r"Liquid Mg#",
+            "kde_label_positions": {"68.3%": (60.5, 0.62, 0), "95.4%": (50.5, 0.96, -18)},
         },
     ]
 
@@ -442,9 +764,11 @@ def plot_merapi_composition_comparison(
             merapi_liquid_points,
             xlim_override=xlim_overrides.get(spec["key"], spec.get("xlim")),
             ylim_override=ylim_overrides.get(spec["key"]),
+            mixing_path_display=mixing_path_display,
         )
     _add_top_merapi_legend(fig)
     fig.tight_layout(rect=(0, 0, 1, 0.90))
+    plt.show()
     return fig, axes
 
 
@@ -893,6 +1217,7 @@ def _draw_violin(
     if "cmedians" in vp:
         vp["cmedians"].set_color("k")
         vp["cmedians"].set_linewidth(max(lw, 1.2))
+        vp["cmedians"].set_alpha(alpha)
         vp["cmedians"].set_zorder(zorder + 1.15)
 
     if not show_quartile_interval:
@@ -913,6 +1238,7 @@ def _draw_violin(
             color="k",
             lw=max(lw * 0.9, 1.05),
             zorder=zorder + 1.05,
+            alpha=min(alpha, 0.95),
             filter_outliers=False,
         )
     return vp
@@ -996,6 +1322,7 @@ def _style_selected_violin(
     body.set_edgecolor(edgecolor)
     body.set_linewidth(lw)
     body.set_linestyle(linestyle)
+    body.set_alpha(1.0)
     body.set_zorder(4.2)
 
 
@@ -1031,6 +1358,34 @@ def _redraw_violin_median(
         zorder=zorder,
     )
 
+
+def _draw_selected_model_summary_lines(
+    ax: plt.Axes,
+    x_center: float,
+    values: Sequence[float],
+    width: float,
+    *,
+    color: str,
+    x_span: Optional[tuple[float, float]] = None,
+    zorder: float = 5.0,
+) -> None:
+    """Draw min, median, and max horizontal lines for a selected model."""
+    clean_values = _remove_boxplot_outliers(values)
+    if clean_values.size == 0:
+        return
+    y_min = float(np.nanmin(clean_values))
+    y_med = float(np.nanmedian(clean_values))
+    y_max = float(np.nanmax(clean_values))
+    if x_span is None:
+        x0 = float(x_center) - width * 0.42
+        x1 = float(x_center) + width * 0.42
+    else:
+        x0, x1 = map(float, x_span)
+    line_effects = [pe.Stroke(linewidth=4.5, foreground="white", alpha=0.86), pe.Normal()]
+    range_lines = ax.hlines([y_min, y_max], x0, x1, color=color, lw=2.0, alpha=0.98, zorder=zorder)
+    median_line = ax.hlines(y_med, x0, x1, color=color, lw=3.4, alpha=1.0, zorder=zorder + 0.1)
+    range_lines.set_path_effects(line_effects)
+    median_line.set_path_effects(line_effects)
 
 def _redraw_violin_quartiles(
     ax: plt.Axes,
@@ -1447,6 +1802,9 @@ def _plot_ranked_this_study_kind_panel(
     group_label_fontsize: float = MANUSCRIPT_GROUP_LABEL_SIZE,
     annotation_fontsize: float = MANUSCRIPT_ANNOTATION_SIZE,
     show_quartile_interval: bool = True,
+    show_uncertainty_band: bool = False,
+    show_rank_percent_annotations: bool = False,
+    show_selected_model_summary: bool = True,
 ) -> None:
     kind_state = state[kind]
     columns_all = kind_state["columns_all"]
@@ -1506,7 +1864,7 @@ def _plot_ranked_this_study_kind_panel(
         facecolor=color_06,
         edgecolor="k",
         lw=edge_lw_default,
-        alpha=1.0,
+        alpha=0.6,
         bw_method=0.25,
         show_quartile_interval=show_quartile_interval,
     )
@@ -1518,7 +1876,7 @@ def _plot_ranked_this_study_kind_panel(
         facecolor=color_10,
         edgecolor="k",
         lw=edge_lw_default,
-        alpha=1.0,
+        alpha=0.6,
         bw_method=0.25,
         show_quartile_interval=show_quartile_interval,
     )
@@ -1600,6 +1958,7 @@ def _plot_ranked_this_study_kind_panel(
         data_all: Sequence[np.ndarray],
         bg_color: str,
     ) -> None:
+        section_span = (0.5, split_idx + 0.5) if phase_type == "cpx_only" else (split_idx + 0.5, n_cols + 0.5)
         selected_ranks = _selected_rank_set_from_topk(
             rank_pcts,
             threshold=selection_threshold,
@@ -1613,25 +1972,35 @@ def _plot_ranked_this_study_kind_panel(
             if idx_local is None:
                 continue
             idx = idx_shift + idx_local
-            _add_subgroup_background(ax, positions_used[idx], violin_width, bg_color, alpha=0.18, zorder=1.5)
             _style_selected_violin(vp, idx, edgecolor="k", lw=edge_lw_selected, linestyle="--")
-            _redraw_violin_median(ax, positions_used[idx], data_all[idx], violin_width, color="k", lw=2.0, zorder=4.8)
+            if show_selected_model_summary:
+                _draw_selected_model_summary_lines(
+                    ax,
+                    positions_used[idx],
+                    data_all[idx],
+                    violin_width,
+                    color=bg_color,
+                    x_span=section_span,
+                    zorder=5.0,
+                )
 
-    _draw_all_uncertainty(positions_06, kind_state["data"]["2006"], "lightgray")
-    _draw_all_uncertainty(positions_10, kind_state["data"]["2010"], "lightgray")
+    if show_uncertainty_band:
+        _draw_all_uncertainty(positions_06, kind_state["data"]["2006"], "lightgray")
+        _draw_all_uncertainty(positions_10, kind_state["data"]["2010"], "lightgray")
 
-    _annotate_all_pcts(
-        kind_state["ranks"]["2006"]["cpx_only"], "cpx_only", 0, positions_06, kind_state["data"]["2006"], selected_06, color_06
-    )
-    _annotate_all_pcts(
-        kind_state["ranks"]["2006"]["cpx_liq"], "cpx_liq", split_idx, positions_06, kind_state["data"]["2006"], selected_06, color_06
-    )
-    _annotate_all_pcts(
-        kind_state["ranks"]["2010"]["cpx_only"], "cpx_only", 0, positions_10, kind_state["data"]["2010"], selected_10, color_10
-    )
-    _annotate_all_pcts(
-        kind_state["ranks"]["2010"]["cpx_liq"], "cpx_liq", split_idx, positions_10, kind_state["data"]["2010"], selected_10, color_10
-    )
+    if show_rank_percent_annotations:
+        _annotate_all_pcts(
+            kind_state["ranks"]["2006"]["cpx_only"], "cpx_only", 0, positions_06, kind_state["data"]["2006"], selected_06, color_06
+        )
+        _annotate_all_pcts(
+            kind_state["ranks"]["2006"]["cpx_liq"], "cpx_liq", split_idx, positions_06, kind_state["data"]["2006"], selected_06, color_06
+        )
+        _annotate_all_pcts(
+            kind_state["ranks"]["2010"]["cpx_only"], "cpx_only", 0, positions_10, kind_state["data"]["2010"], selected_10, color_10
+        )
+        _annotate_all_pcts(
+            kind_state["ranks"]["2010"]["cpx_liq"], "cpx_liq", split_idx, positions_10, kind_state["data"]["2010"], selected_10, color_10
+        )
 
     _highlight_selected(
         vp06, kind_state["ranks"]["2006"]["cpx_only"], "cpx_only", 0, positions_06, kind_state["data"]["2006"], highlight_06
@@ -1906,6 +2275,7 @@ def _add_category_and_type_bands(
     type_fontsize: float = MANUSCRIPT_ANNOTATION_SIZE,
     category_y: float = 1.04,
     type_y: float = 0.985,
+    show_type_labels: bool = True,
 ) -> None:
     x_positions = np.asarray(x_positions, dtype=float)
     if len(methods) == 0 or x_positions.size == 0:
@@ -1957,16 +2327,17 @@ def _add_category_and_type_bands(
         x1 = block_edges[i1 + 1]
         ax.axvspan(x0, x1, color="white", alpha=1.0, zorder=0)
         xc = 0.5 * (x0 + x1)
-        ax.text(
-            xc,
-            type_y,
-            _wrap_label(method_type, width=14, allow_word_break=True),
-            transform=ax.get_xaxis_transform(),
-            ha="center",
-            va="top",
-            fontsize=type_fontsize,
-            color="0.20",
-        )
+        if show_type_labels:
+            ax.text(
+                xc,
+                type_y,
+                _wrap_label(method_type, width=14, allow_word_break=True),
+                transform=ax.get_xaxis_transform(),
+                ha="center",
+                va="top",
+                fontsize=type_fontsize,
+                color="0.20",
+            )
         ax.axvline(x0, color="0.75", lw=1.0, zorder=1)
         ax.axvline(x1, color="0.75", lw=1.0, zorder=1)
 
@@ -2371,6 +2742,7 @@ def _annotate_favored_pct_above_violin(
     kind: str,
     y_pad_frac: float = 0.025,
     fontsize: float = 14,
+    x_offset: float = 0.0,
 ) -> None:
     clean_values = np.asarray(values, dtype=float).ravel()
     clean_values = clean_values[np.isfinite(clean_values)]
@@ -2380,7 +2752,7 @@ def _annotate_favored_pct_above_violin(
     y_pad = abs(y_max - y_min) * y_pad_frac
     y_anchor = float(np.nanmin(clean_values) - y_pad) if kind == "P" else float(np.nanmax(clean_values) + y_pad)
     ax.text(
-        float(x_center),
+        float(x_center) + x_offset,
         y_anchor,
         text,
         color=color,
@@ -2457,6 +2829,8 @@ def _plot_this_study_dual_violins_on_literature_comparison(
     annotate_rmse: bool = True,
     x_centers: Optional[Sequence[float]] = None,
     show_quartile_interval: bool = True,
+    favored_pct_fontsize: Optional[float] = None,
+    favored_pct_x_offset: float = 0.0,
 ) -> None:
     if len(this_cols) == 0:
         return
@@ -2539,7 +2913,8 @@ def _plot_this_study_dual_violins_on_literature_comparison(
                 f"{int(round(pct))}%",
                 eruption_color,
                 kind=kind,
-                fontsize=annotation_fontsize,
+                fontsize=annotation_fontsize if favored_pct_fontsize is None else favored_pct_fontsize,
+                x_offset=favored_pct_x_offset,
             )
 
 
@@ -2871,7 +3246,7 @@ def _plot_ranked_literature_panel(
             tick_labelsize=tick_labelsize,
         )
     else:
-        ax.set_ylabel("Temperature (°C)", fontsize=y_axis_label_fontsize)
+        ax.set_ylabel("Temperature (掳C)", fontsize=y_axis_label_fontsize)
         if temperature_ylim is not None:
             ax.set_ylim(*temperature_ylim)
         ax.tick_params(axis="y", labelsize=tick_labelsize)
@@ -3062,7 +3437,7 @@ def _plot_original_vs_pre_2006_kind_panel(
         # reverse y-axis to have pressure increase downwards
         ax.invert_yaxis()
     else:
-        ax.set_ylabel("Temperature (°C)", fontsize=y_axis_label_fontsize)
+        ax.set_ylabel("Temperature (掳C)", fontsize=y_axis_label_fontsize)
         if temperature_ylim is not None:
             ax.set_ylim(*temperature_ylim)
 
@@ -3075,6 +3450,129 @@ def _plot_original_vs_pre_2006_kind_panel(
             y_pad = max((y_max - y_min) * 0.18, 20.0)
             ax.set_ylim(y_min - y_pad * 0.25, y_max + y_pad)
 
+
+def _build_kd_columns_for_comparison(
+    kind: str,
+    kd_states: Mapping[str, Mapping[str, Any]],
+    *,
+    selection_threshold: float,
+    model_selection_mode: str,
+    cumulative_selection_threshold: float,
+    use_model_abbreviations: bool,
+) -> list[dict[str, Any]]:
+    columns: list[dict[str, Any]] = []
+    for kd_label, state in kd_states.items():
+        state_columns = _build_this_study_columns_for_comparison(
+            kind,
+            state,
+            selection_threshold=selection_threshold,
+            model_selection_mode=model_selection_mode,
+            cumulative_selection_threshold=cumulative_selection_threshold,
+            use_model_abbreviations=use_model_abbreviations,
+        )
+        for col in state_columns:
+            if "subcolumns" in col:
+                continue
+            if col.get("type") != "cpx_liq":
+                continue
+            col_copy = dict(col)
+            col_copy["category"] = kd_label
+            columns.append(col_copy)
+    return columns
+
+
+def _plot_kd_comparison_kind_panel(
+    ax: plt.Axes,
+    kind: str,
+    kd_states: Mapping[str, Mapping[str, Any]],
+    *,
+    selection_threshold: float,
+    model_selection_mode: str,
+    cumulative_selection_threshold: float,
+    pressure_ylim: Optional[tuple[float, float]],
+    temperature_ylim: Optional[tuple[float, float]],
+    use_model_abbreviations: bool,
+    tick_labelsize: float = MANUSCRIPT_THIS_STUDY_TICK_LABEL_SIZE,
+    annotation_fontsize: float = MANUSCRIPT_THIS_STUDY_ANNOTATION_SIZE,
+    y_axis_label_fontsize: float = MANUSCRIPT_THIS_STUDY_Y_AXIS_LABEL_SIZE,
+    show_quartile_interval: bool = True,
+) -> None:
+    columns = _build_kd_columns_for_comparison(
+        kind,
+        kd_states,
+        selection_threshold=selection_threshold,
+        model_selection_mode=model_selection_mode,
+        cumulative_selection_threshold=cumulative_selection_threshold,
+        use_model_abbreviations=use_model_abbreviations,
+    )
+    x_centers = np.arange(1, len(columns) + 1, dtype=float)
+    all_values = [
+        np.asarray(values, dtype=float)
+        for col in columns
+        for values in (col.get("data", []), col.get("overall_data", []))
+        if np.asarray(values, dtype=float).size > 0
+    ]
+
+    ax.minorticks_on()
+    ax.yaxis.set_minor_locator(AutoMinorLocator(2))
+    ax.tick_params(axis="y", which="minor", length=3, width=0.8)
+    ax.tick_params(axis="y", which="major", length=6, width=1.0, labelsize=tick_labelsize)
+    ax.grid(True, which="major", axis="y", linestyle="-", linewidth=0.8, color="0.85", zorder=0)
+    ax.grid(True, which="minor", axis="y", linestyle="-", linewidth=0.5, color="0.92", zorder=0)
+
+    if columns:
+        _add_category_and_type_bands(
+            ax,
+            [{"category": col["category"], "type": col["type"], "label": col["label"]} for col in columns],
+            x_centers,
+            category_fontsize=MANUSCRIPT_GROUP_LABEL_SIZE,
+            type_fontsize=annotation_fontsize,
+            show_type_labels=False,
+        )
+        _plot_this_study_dual_violins_on_literature_comparison(
+            ax,
+            columns,
+            kind=kind,
+            annotation_fontsize=annotation_fontsize,
+            annotate_rmse=False,
+            show_quartile_interval=show_quartile_interval,
+            favored_pct_fontsize=max(annotation_fontsize - 2.0, 1.0),
+            favored_pct_x_offset=0.04,
+        )
+
+    raw_xtick_labels = [col["label"] for col in columns]
+    ax.set_xticks(x_centers)
+    ax.set_xticklabels(
+        [_wrap_label(label, width=12) for label in raw_xtick_labels],
+        rotation=0,
+        ha="center",
+        fontsize=tick_labelsize,
+    )
+    ax.tick_params(axis="x", which="major", labelsize=tick_labelsize)
+    ax.xaxis.set_minor_locator(NullLocator())
+    ax.tick_params(axis="x", which="minor", bottom=False, top=False)
+    _apply_threshold_xtick_rotation(ax, raw_xtick_labels)
+    ax.set_xlim(0.5, len(columns) + 0.5)
+
+    if kind == "P":
+        ax.set_ylabel("Pressure (kbar)", fontsize=y_axis_label_fontsize)
+        if pressure_ylim is not None:
+            ax.set_ylim(*pressure_ylim)
+        # reverse y-axis to have pressure increase downwards
+        ax.invert_yaxis()
+    else:
+        ax.set_ylabel("Temperature (°C)", fontsize=y_axis_label_fontsize)
+        if temperature_ylim is not None:
+            ax.set_ylim(*temperature_ylim)
+
+    if kind == "T" and temperature_ylim is None and all_values:
+        finite_values = np.concatenate(all_values)
+        finite_values = finite_values[np.isfinite(finite_values)]
+        if finite_values.size > 0:
+            y_min = float(np.nanmin(finite_values))
+            y_max = float(np.nanmax(finite_values))
+            y_pad = max((y_max - y_min) * 0.18, 20.0)
+            ax.set_ylim(y_min - y_pad * 0.25, y_max + y_pad)
 
 def _apply_this_study_axis_font_sizes(
     fig: plt.Figure,
@@ -3146,6 +3644,9 @@ def plot_ranked_thermobarometry_this_study(
     tick_labelsize: float = MANUSCRIPT_THIS_STUDY_TICK_LABEL_SIZE,
     model_tick_labelsize: float = MANUSCRIPT_THIS_STUDY_MODEL_TICK_LABEL_SIZE,
     show_quartile_interval: bool = True,
+    show_uncertainty_band: bool = False,
+    show_rank_percent_annotations: bool = False,
+    show_selected_model_summary: bool = True,
 ) -> tuple[plt.Figure, np.ndarray]:
     """
     Plot the notebook-style two-panel "this study" summary figure.
@@ -3219,6 +3720,9 @@ def plot_ranked_thermobarometry_this_study(
         group_label_fontsize=MANUSCRIPT_THIS_STUDY_GROUP_LABEL_SIZE,
         annotation_fontsize=MANUSCRIPT_THIS_STUDY_ANNOTATION_SIZE,
         show_quartile_interval=show_quartile_interval,
+        show_uncertainty_band=show_uncertainty_band,
+        show_rank_percent_annotations=show_rank_percent_annotations,
+        show_selected_model_summary=show_selected_model_summary,
     )
     _plot_ranked_this_study_kind_panel(
         axes[1],
@@ -3237,6 +3741,9 @@ def plot_ranked_thermobarometry_this_study(
         group_label_fontsize=MANUSCRIPT_THIS_STUDY_GROUP_LABEL_SIZE,
         annotation_fontsize=MANUSCRIPT_THIS_STUDY_ANNOTATION_SIZE,
         show_quartile_interval=show_quartile_interval,
+        show_uncertainty_band=show_uncertainty_band,
+        show_rank_percent_annotations=show_rank_percent_annotations,
+        show_selected_model_summary=show_selected_model_summary,
     )
 
     if add_legend:
@@ -3418,7 +3925,7 @@ def plot_ranked_thermobarometry_original_vs_pre_2006_comparison(
     panel_labels: tuple[str, ...] = ("(a)", "(b)"),
     save_path: Optional[str | Path] = None,
     use_model_abbreviations: bool = True,
-    show_quartile_interval: bool = True,
+    show_quartile_interval: bool = False,
 ) -> tuple[plt.Figure, np.ndarray]:
     """
     Plot a two-panel comparison of original and +pre-2006 cpx-liquid results.
@@ -3514,6 +4021,508 @@ def plot_ranked_thermobarometry_original_vs_pre_2006_comparison(
     return fig, axes
 
 
+
+def plot_ranked_thermobarometry_kd_comparison(
+    kd_workflow_bundles: Mapping[str, Mapping[str, Any]],
+    pressure_columns: Mapping[str, Sequence[str]],
+    temperature_columns: Mapping[str, Sequence[str]],
+    *,
+    pressure_model_pool: Optional[Sequence[Any]] = None,
+    temperature_model_pool: Optional[Sequence[Any]] = None,
+    selection_threshold: float = 50.0,
+    model_selection_mode: str = "cumulative",
+    cumulative_selection_threshold: float = 80.0,
+    pressure_ylim: Optional[tuple[float, float]] = (-1, 10),
+    temperature_ylim: Optional[tuple[float, float]] = None,
+    figsize: tuple[float, float] = (20.0, 15.0),
+    panel_labels: tuple[str, ...] = ("(a) Pressure", "(b) Temperature"),
+    save_path: Optional[str | Path] = None,
+    use_model_abbreviations: bool = True,
+    show_quartile_interval: bool = False,
+) -> tuple[plt.Figure, np.ndarray]:
+    """
+    Plot a two-panel cpx-liquid comparison across Kd workflow groups.
+
+    ``kd_workflow_bundles`` preserves insertion order for the plotted Kd groups.
+    Each value must contain ``"cpx_only"`` and ``"cpx_liq"`` workflow bundles.
+    """
+    kd_states: dict[str, dict[str, Any]] = {}
+    for kd_label, bundles in kd_workflow_bundles.items():
+        if not isinstance(bundles, Mapping):
+            raise TypeError(f"Workflow group {kd_label!r} must be a mapping.")
+        if "cpx_only" not in bundles or "cpx_liq" not in bundles:
+            raise KeyError(f"Workflow group {kd_label!r} must contain 'cpx_only' and 'cpx_liq'.")
+        kd_states[kd_label] = _build_ranked_thermobarometry_state(
+            bundles["cpx_only"],
+            bundles["cpx_liq"],
+            pressure_columns,
+            temperature_columns,
+            pressure_model_pool=pressure_model_pool,
+            temperature_model_pool=temperature_model_pool,
+        )
+
+    fig, axes_obj = plt.subplots(2, 1, figsize=figsize, constrained_layout=True)
+    fig.set_constrained_layout_pads(hspace=0.14)
+    axes = np.asarray(axes_obj)
+
+    _plot_kd_comparison_kind_panel(
+        axes[0],
+        "P",
+        kd_states,
+        selection_threshold=selection_threshold,
+        model_selection_mode=model_selection_mode,
+        cumulative_selection_threshold=cumulative_selection_threshold,
+        pressure_ylim=pressure_ylim,
+        temperature_ylim=temperature_ylim,
+        use_model_abbreviations=use_model_abbreviations,
+        show_quartile_interval=show_quartile_interval,
+    )
+    _plot_kd_comparison_kind_panel(
+        axes[1],
+        "T",
+        kd_states,
+        selection_threshold=selection_threshold,
+        model_selection_mode=model_selection_mode,
+        cumulative_selection_threshold=cumulative_selection_threshold,
+        pressure_ylim=pressure_ylim,
+        temperature_ylim=temperature_ylim,
+        use_model_abbreviations=use_model_abbreviations,
+        show_quartile_interval=show_quartile_interval,
+    )
+
+    year_2006_handle = (
+        Patch(facecolor="blue", alpha=0.55),
+        Line2D([0], [0], color="blue", lw=2.2, alpha=1.0),
+    )
+    year_2010_handle = (
+        Patch(facecolor="red", alpha=0.55),
+        Line2D([0], [0], color="red", lw=2.2, alpha=1.0),
+    )
+    legend_items = [
+        year_2006_handle,
+        year_2010_handle,
+        Patch(facecolor="0.60", edgecolor="0.25", alpha=0.55),
+        Patch(facecolor="none", edgecolor="0.25", linewidth=1.4),
+    ]
+    axes[0].legend(
+        handles=legend_items,
+        labels=["2006", "2010", "all samples", "favored subset"],
+        loc="upper left",
+        bbox_to_anchor=(0.01, 0.25),
+        frameon=True,
+        ncol=2,
+        fontsize=MANUSCRIPT_THIS_STUDY_LEGEND_SIZE,
+        borderpad=0.35,
+        columnspacing=1.75,
+        handlelength=2.1,
+        handletextpad=0.5,
+        labelspacing=0.25,
+        handler_map={tuple: HandlerTuple(ndivide=None)},
+    )
+
+    if panel_labels:
+        for ax_i, label in enumerate(panel_labels[: len(axes)]):
+            _add_panel_label(axes[ax_i], label, y=1.1)
+
+    if save_path is not None:
+        fig.savefig(Path(save_path), dpi=300)
+
+    return fig, axes
+
+def _format_rank_pie_labels(
+    rank_pcts: Sequence[tuple[str, float]],
+    kind: str,
+    *,
+    use_model_abbreviations: bool,
+    pct_label_cutoff: Optional[float] = None,
+) -> tuple[list[float], list[str]]:
+    values: list[float] = []
+    labels: list[str] = []
+    cumulative = 0.0
+    for model_name, pct in rank_pcts:
+        pct_value = float(pct)
+        if not np.isfinite(pct_value) or pct_value <= 0:
+            continue
+        model_label = _model_axis_label(model_name, kind, use_model_abbreviations=use_model_abbreviations)
+        model_label = _wrap_label(model_label, width=9)
+        if pct_label_cutoff is None or cumulative < pct_label_cutoff:
+            labels.append(f"{model_label}\n{pct_value:.0f}%")
+        else:
+            labels.append(model_label)
+        values.append(pct_value)
+        cumulative += pct_value
+    return values, labels
+
+
+def _label_fits_inside_rank_pie(label: str, pct_value: float) -> bool:
+    return pct_value >= 5.0
+
+
+def _single_line_rank_pie_model_label(label: str) -> str:
+    lines = [line.strip() for line in str(label).splitlines() if line.strip()]
+    if len(lines) >= 2 and lines[-1].endswith("%"):
+        lines = lines[:-1]
+    return " ".join(lines)
+
+
+def _spread_rank_pie_outside_labels(items: list[dict[str, Any]], *, min_gap: float = 0.15, y_limit: float = 1.18) -> None:
+    if not items:
+        return
+    if len(items) > 1:
+        min_gap = min(min_gap, (2.0 * y_limit) / (len(items) - 1))
+    items.sort(key=lambda item: item["y"])
+    for idx in range(1, len(items)):
+        if items[idx]["y"] - items[idx - 1]["y"] < min_gap:
+            items[idx]["y"] = items[idx - 1]["y"] + min_gap
+    top_shift = max(0.0, items[-1]["y"] - y_limit)
+    bottom_shift = max(0.0, -y_limit - items[0]["y"])
+    shift = bottom_shift - top_shift
+    if shift:
+        for item in items:
+            item["y"] += shift
+    for idx in range(len(items) - 2, -1, -1):
+        if items[idx + 1]["y"] - items[idx]["y"] < min_gap:
+            items[idx]["y"] = items[idx + 1]["y"] - min_gap
+    for item in items:
+        item["y"] = float(np.clip(item["y"], -y_limit, y_limit))
+
+
+def _draw_rank_pie_with_mixed_labels(
+    ax: plt.Axes,
+    values: Sequence[float],
+    labels: Sequence[str],
+    *,
+    colors: Sequence[Any],
+    startangle: float = 90.0,
+    counterclock: bool = False,
+    inside_fontsize: float = 13.5,
+    outside_fontsize: float = 9.6,
+) -> None:
+    wedges, _ = ax.pie(
+        values,
+        labels=None,
+        startangle=startangle,
+        counterclock=counterclock,
+        colors=colors[: len(values)],
+        radius=1.05,
+        wedgeprops={"linewidth": 0.45, "edgecolor": "white"},
+    )
+    outside_items: list[dict[str, Any]] = []
+    total = float(np.nansum(values))
+    for wedge, value, label in zip(wedges, values, labels):
+        pct_value = 100.0 * float(value) / total if total > 0 else 0.0
+        angle = 0.5 * (wedge.theta1 + wedge.theta2)
+        angle_rad = np.deg2rad(angle)
+        x_unit = float(np.cos(angle_rad))
+        y_unit = float(np.sin(angle_rad))
+        if _label_fits_inside_rank_pie(label, pct_value):
+            face_rgb = np.asarray(wedge.get_facecolor()[:3], dtype=float)
+            luminance = float(np.dot(face_rgb, [0.299, 0.587, 0.114]))
+            text_color = "white" if luminance < 0.48 else "black"
+            text_effects = [pe.Stroke(linewidth=1.4, foreground="black" if text_color == "white" else "white", alpha=0.58), pe.Normal()]
+            ax.text(
+                0.68 * x_unit,
+                0.68 * y_unit,
+                label,
+                ha="center",
+                va="center",
+                fontsize=inside_fontsize,
+                color=text_color,
+                linespacing=0.92,
+                zorder=4,
+                path_effects=text_effects,
+            )
+        else:
+            outside_items.append(
+                {
+                    "label": _single_line_rank_pie_model_label(label),
+                    "x": x_unit,
+                    "y": 1.02 * y_unit,
+                    "xy": (0.96 * x_unit, 0.96 * y_unit),
+                    "side": 1 if x_unit >= 0 else -1,
+                }
+            )
+
+    for side in (-1, 1):
+        side_items = [item for item in outside_items if item["side"] == side]
+        _spread_rank_pie_outside_labels(side_items, min_gap=0.17, y_limit=1.08)
+        for item in side_items:
+            x_text = 1.14 * side
+            ax.annotate(
+                item["label"],
+                xy=item["xy"],
+                xytext=(x_text, item["y"]),
+                ha="left" if side > 0 else "right",
+                va="center",
+                fontsize=outside_fontsize,
+                linespacing=0.92,
+                arrowprops={
+                    "arrowstyle": "-",
+                    "color": "0.35",
+                    "lw": 0.65,
+                    "shrinkA": 0,
+                    "shrinkB": 0,
+                    "connectionstyle": "arc3,rad=0.0",
+                },
+                zorder=5,
+            )
+
+
+def _rank_pie_split_save_path(save_path: str | Path, kind: str, phase_type: str) -> Path:
+    save_path = Path(save_path)
+    return save_path.with_name(f"{save_path.stem}_{kind}_{phase_type}{save_path.suffix}")
+
+
+def _draw_rank_pie_year_pair(
+    state: Mapping[str, Any],
+    kind: str,
+    phase_type: str,
+    *,
+    use_model_abbreviations: bool,
+    figsize: tuple[float, float],
+    dpi: int,
+) -> tuple[plt.Figure, np.ndarray]:
+    fig, axes_obj = plt.subplots(1, 2, figsize=figsize, dpi=dpi, constrained_layout=True)
+    axes = np.asarray(axes_obj)
+    colors = list(plt.cm.tab20.colors)
+    for ax, year in zip(axes, ("2006", "2010")):
+        rank_pcts = state[kind]["ranks"][year][phase_type]
+        values, labels = _format_rank_pie_labels(
+            rank_pcts,
+            kind,
+            use_model_abbreviations=use_model_abbreviations,
+        )
+        if values:
+            _draw_rank_pie_with_mixed_labels(
+                ax,
+                values,
+                labels,
+                colors=colors,
+                startangle=90,
+                counterclock=False,
+            )
+        ax.set_title(year, fontsize=13.0)
+        ax.set_aspect("equal")
+    fig.suptitle(f"{kind} {_display_phase_type_label(phase_type)}", fontsize=15.0, fontweight="bold")
+    return fig, axes
+
+
+def plot_ranked_thermobarometry_rank_pies_split(
+    cpx_only_workflows: Any,
+    cpx_liq_workflows: Any,
+    pressure_columns: Mapping[str, Sequence[str]],
+    temperature_columns: Mapping[str, Sequence[str]],
+    *,
+    pressure_model_pool: Optional[Sequence[Any]] = None,
+    temperature_model_pool: Optional[Sequence[Any]] = None,
+    use_model_abbreviations: bool = True,
+    figsize: tuple[float, float] = (6.2, 3.7),
+    dpi: int = 200,
+    save_path: Optional[str | Path] = None,
+) -> dict[str, tuple[plt.Figure, np.ndarray]]:
+    """Plot four rank-pie figures, each comparing 2006 and 2010."""
+    state = _build_ranked_thermobarometry_state(
+        cpx_only_workflows,
+        cpx_liq_workflows,
+        pressure_columns,
+        temperature_columns,
+        pressure_model_pool=pressure_model_pool,
+        temperature_model_pool=temperature_model_pool,
+    )
+    figures: dict[str, tuple[plt.Figure, np.ndarray]] = {}
+    for kind in ("P", "T"):
+        for phase_type in ("cpx_only", "cpx_liq"):
+            fig_axes = _draw_rank_pie_year_pair(
+                state,
+                kind,
+                phase_type,
+                use_model_abbreviations=use_model_abbreviations,
+                figsize=figsize,
+                dpi=dpi,
+            )
+            key = f"rank_pies_{kind}_{phase_type}"
+            figures[key] = fig_axes
+            if save_path is not None:
+                fig_axes[0].savefig(
+                    _rank_pie_split_save_path(save_path, kind, phase_type),
+                    dpi=dpi,
+                    bbox_inches="tight",
+                    pad_inches=0.03,
+                )
+    return figures
+
+
+def plot_ranked_thermobarometry_rank_pies(
+    cpx_only_workflows: Any,
+    cpx_liq_workflows: Any,
+    pressure_columns: Mapping[str, Sequence[str]],
+    temperature_columns: Mapping[str, Sequence[str]],
+    *,
+    pressure_model_pool: Optional[Sequence[Any]] = None,
+    temperature_model_pool: Optional[Sequence[Any]] = None,
+    use_model_abbreviations: bool = True,
+    figsize: tuple[float, float] = (15.0, 8.0),
+    dpi: int = 200,
+    save_path: Optional[str | Path] = None,
+) -> tuple[plt.Figure, np.ndarray]:
+    """Plot model-selection percentage pies for P/T, phase type, and eruption year."""
+    state = _build_ranked_thermobarometry_state(
+        cpx_only_workflows,
+        cpx_liq_workflows,
+        pressure_columns,
+        temperature_columns,
+        pressure_model_pool=pressure_model_pool,
+        temperature_model_pool=temperature_model_pool,
+    )
+    fig, axes_obj = plt.subplots(2, 4, figsize=figsize, dpi=dpi, constrained_layout=True)
+    axes = np.asarray(axes_obj)
+    phase_order = ("cpx_only", "cpx_liq")
+    year_order = ("2006", "2010")
+    colors = list(plt.cm.tab20.colors)
+
+    for row_idx, kind in enumerate(("P", "T")):
+        for phase_idx, phase_type in enumerate(phase_order):
+            for year_idx, year in enumerate(year_order):
+                ax = axes[row_idx, phase_idx * 2 + year_idx]
+                rank_pcts = state[kind]["ranks"][year][phase_type]
+                values, labels = _format_rank_pie_labels(
+                    rank_pcts,
+                    kind,
+                    use_model_abbreviations=use_model_abbreviations,
+                )
+                if values:
+                    _draw_rank_pie_with_mixed_labels(
+                        ax,
+                        values,
+                        labels,
+                        colors=colors,
+                        startangle=90,
+                        counterclock=False,
+                    )
+                ax.set_title(f"{kind} {_display_phase_type_label(phase_type)} {year}", fontsize=10.5)
+                ax.set_aspect("equal")
+
+    if save_path is not None:
+        fig.savefig(Path(save_path), dpi=dpi, bbox_inches="tight")
+    return fig, axes
+
+def export_ranked_thermobarometry_model_summary(
+    cpx_only_workflows: Any,
+    cpx_liq_workflows: Any,
+    pressure_columns: Mapping[str, Sequence[str]],
+    temperature_columns: Mapping[str, Sequence[str]],
+    out_path: str | Path,
+    *,
+    pressure_model_pool: Optional[Sequence[Any]] = None,
+    temperature_model_pool: Optional[Sequence[Any]] = None,
+    densities_kg_m3: Optional[Sequence[float]] = None,
+    layer_boundaries_km: Optional[Sequence[float]] = None,
+    selection_threshold: float = 50.0,
+    model_selection_mode: str = "cumulative",
+    cumulative_selection_threshold: float = 80.0,
+) -> dict[str, pd.DataFrame]:
+    """Export Fig. 8-9 model summaries using the same Tukey-fence state."""
+    state = _build_ranked_thermobarometry_state(
+        cpx_only_workflows,
+        cpx_liq_workflows,
+        pressure_columns,
+        temperature_columns,
+        pressure_model_pool=pressure_model_pool,
+        temperature_model_pool=temperature_model_pool,
+    )
+
+    def _summary_value(values: np.ndarray, reducer: str) -> float:
+        if values.size == 0:
+            return np.nan
+        if reducer == "min":
+            return float(np.nanmin(values))
+        if reducer == "max":
+            return float(np.nanmax(values))
+        if reducer == "median":
+            return float(np.nanmedian(values))
+        raise ValueError(f"Unsupported reducer: {reducer}")
+
+    def _depth_value(pressure_kbar: float) -> float:
+        if densities_kg_m3 is None or layer_boundaries_km is None or not np.isfinite(pressure_kbar):
+            return np.nan
+        return float(
+            _pressure_to_depth_km(
+                pressure_kbar,
+                densities_kg_m3=densities_kg_m3,
+                layer_boundaries_km=layer_boundaries_km,
+            )
+        )
+
+    def _build_kind_summary(kind: str) -> pd.DataFrame:
+        kind_state = state[kind]
+        rows: list[dict[str, Any]] = []
+
+        for eruption in ("2006", "2010"):
+            for phase_type in ("cpx_only", "cpx_liq"):
+                df_pred = kind_state["results"][eruption][phase_type]
+                rank_pcts = kind_state["ranks"][eruption][phase_type]
+                rank_pct_map = {model_name: float(pct) for model_name, pct in rank_pcts}
+                selected_rank_ids = _selected_rank_set_from_topk(
+                    rank_pcts,
+                    threshold=selection_threshold,
+                    model_selection_mode=model_selection_mode,
+                    cumulative_threshold=cumulative_selection_threshold,
+                )
+                selected_models = {
+                    model_name
+                    for rank_i, (model_name, _) in enumerate(rank_pcts)
+                    if rank_i in selected_rank_ids
+                }
+
+                for model_name in kind_state["columns"][phase_type]:
+                    if model_name not in df_pred.columns:
+                        raise KeyError(f"{kind} results {eruption} {phase_type} are missing column {model_name!r}.")
+
+                    raw_values = pd.to_numeric(df_pred[model_name], errors="coerce").replace(
+                        [np.inf, -np.inf],
+                        np.nan,
+                    )
+                    raw_array = raw_values.dropna().to_numpy(dtype=float)
+                    tukey_array = _remove_boxplot_outliers(raw_array)
+                    row = {
+                        "quantity": kind,
+                        "eruption": eruption,
+                        "phase_type": phase_type,
+                        "model": model_name,
+                        "min": _summary_value(tukey_array, "min"),
+                        "max": _summary_value(tukey_array, "max"),
+                        "median": _summary_value(tukey_array, "median"),
+                        "n_samples_raw": int(raw_array.size),
+                        "n_samples_after_tukey": int(tukey_array.size),
+                        "proportion_samples_favored_model": rank_pct_map.get(model_name, 0.0) / 100.0,
+                        "selected_by_AIMS4PT": model_name in selected_models,
+                    }
+                    if kind == "P":
+                        row.update(
+                            {
+                                "min_depth_km": _depth_value(row["min"]),
+                                "max_depth_km": _depth_value(row["max"]),
+                                "median_depth_km": _depth_value(row["median"]),
+                            }
+                        )
+                    rows.append(row)
+
+        return pd.DataFrame(rows)
+
+    summaries = {
+        "P_summary": _build_kind_summary("P"),
+        "T_summary": _build_kind_summary("T"),
+    }
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with pd.ExcelWriter(out_path) as writer:
+        for sheet_name, summary_df in summaries.items():
+            summary_df.to_excel(writer, sheet_name=sheet_name, index=False)
+
+    return summaries
+
+
 def _show_ranked_thermobarometry_figures(figures: Mapping[str, tuple[plt.Figure, np.ndarray]]) -> None:
     backend = plt.get_backend().lower()
     if backend.endswith("agg"):
@@ -3570,7 +4579,11 @@ def plot_ranked_thermobarometry_summary(
     literature_reservoir_label_x_offset: float = 0.95,
     literature_reservoir_label_right_margin: float = 0.10,
     literature_this_study_x_spacing: float = 1.0,
-    show_quartile_interval: bool = True,
+    show_quartile_interval: bool = False,
+    show_uncertainty_band: bool = False,
+    show_rank_percent_annotations: bool = False,
+    show_selected_model_summary: bool = True,
+    rank_pie_save_path: Optional[str | Path] = None,
 ) -> dict[str, tuple[plt.Figure, np.ndarray]]:
     """
     Convenience wrapper that reproduces both notebook summary figures.
@@ -3623,9 +4636,24 @@ def plot_ranked_thermobarometry_summary(
             tick_labelsize=this_study_tick_labelsize,
             model_tick_labelsize=this_study_model_tick_labelsize,
             show_quartile_interval=show_quartile_interval,
+            show_uncertainty_band=show_uncertainty_band,
+            show_rank_percent_annotations=show_rank_percent_annotations,
+            show_selected_model_summary=show_selected_model_summary,
         )
     }
 
+    if rank_pie_save_path is not None:
+        figures.update(plot_ranked_thermobarometry_rank_pies_split(
+            cpx_only_workflows,
+            cpx_liq_workflows,
+            pressure_columns,
+            temperature_columns,
+            pressure_model_pool=pressure_model_pool,
+            temperature_model_pool=temperature_model_pool,
+            use_model_abbreviations=use_model_abbreviations,
+            save_path=rank_pie_save_path,
+            dpi=200,
+        ))
     if pressure_literature is not None and (temperature_literature is not None or not literature_include_temperature):
         figures["literature_comparison"] = plot_ranked_thermobarometry_literature_comparison(
             cpx_only_workflows,
@@ -3732,7 +4760,6 @@ def pairwise_euclidean__nb04_c77(A: np.ndarray, B: np.ndarray) -> np.ndarray:
     Compute pairwise Euclidean distances between rows of A (n x d) and B (m x d).
     Returns dist matrix (n x m).
     """
-    # ||a-b||^2 = ||a||^2 + ||b||^2 - 2 a路b
     A2 = np.sum(A * A, axis=1)[:, None]   # (n,1)
     B2 = np.sum(B * B, axis=1)[None, :]   # (1,m)
     D2 = A2 + B2 - 2.0 * (A @ B.T)
@@ -3861,7 +4888,7 @@ def pairwise_euclidean__nb04_c78(A: np.ndarray, B: np.ndarray) -> np.ndarray:
     Compute pairwise Euclidean distances between rows of A (n x d) and B (m x d).
     Returns dist matrix (n x m).
     """
-    # ||a-b||^2 = ||a||^2 + ||b||^2 - 2 a路b
+    # ||a-b||^2 = ||a||^2 + ||b||^2 - 2 a璺痓
     A2 = np.sum(A * A, axis=1)[:, None]   # (n,1)
     B2 = np.sum(B * B, axis=1)[None, :]   # (1,m)
     D2 = A2 + B2 - 2.0 * (A @ B.T)

@@ -3505,11 +3505,37 @@ def _calc_min_individual_rmse__nb03_c20(y_true, predicted_df, model_cols):
             rmses.append(float(np.sqrt(np.nanmean(residual.to_numpy(dtype=float) ** 2))))
     return min(rmses) if rmses else np.nan
 
+def _calc_individual_rmse_range__nb03_c20(y_true, predicted_df, model_cols):
+    rmses = []
+    for col in model_cols:
+        if col not in predicted_df.columns:
+            continue
+        residual = pd.to_numeric(predicted_df[col], errors="coerce") - y_true
+        residual = residual.replace([np.inf, -np.inf], np.nan).dropna()
+        if len(residual):
+            rmses.append(float(np.sqrt(np.nanmean(residual.to_numpy(dtype=float) ** 2))))
+    if not rmses:
+        return (np.nan, np.nan)
+    return (float(np.nanmin(rmses)), float(np.nanmax(rmses)))
+
 def _format_rmse_value__nb03_c20(value, fmt):
     if value is None or not np.isfinite(value):
         return "NA"
     return format(float(value), fmt)
 
+def _format_rmse_range__nb03_c20(values, fmt):
+    if values is None:
+        return "NA"
+    if np.isscalar(values):
+        return _format_rmse_value__nb03_c20(values, fmt)
+    values_arr = np.asarray(values, dtype=float).ravel()
+    values_arr = values_arr[np.isfinite(values_arr)]
+    if values_arr.size == 0:
+        return "NA"
+    return (
+        f"{_format_rmse_value__nb03_c20(np.nanmin(values_arr), fmt)}-"
+        f"{_format_rmse_value__nb03_c20(np.nanmax(values_arr), fmt)}"
+    )
 def plot_pressure_residual_panel__nb03_c20(
     P_real,
     predicted_P_df,
@@ -3714,8 +3740,8 @@ def plot_pressure_residual_panel__nb03_c20(
                 bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor="none", alpha=0.6),
             )
         this_rmse = wf_rmse if workflow_rmse_override is None else workflow_rmse_override
-        individual_rmse = (
-            _calc_min_individual_rmse__nb03_c20(P_real_, predicted_, model_cols)
+        individual_rmse_range = (
+            _calc_individual_rmse_range__nb03_c20(P_real_, predicted_, model_cols)
             if individual_rmse_override is None
             else individual_rmse_override
         )
@@ -3723,11 +3749,10 @@ def plot_pressure_residual_panel__nb03_c20(
             *rmse_text_xy,
             "RMSE:\n"
             f"This study = {_format_rmse_value__nb03_c20(this_rmse, workflow_rmse_fmt)} kbar\n"
-            f"Individual $\\geq$ {_format_rmse_value__nb03_c20(individual_rmse, individual_rmse_fmt)} kbar",
+            f"Individual models = {_format_rmse_range__nb03_c20(individual_rmse_range, individual_rmse_fmt)} kbar",
             transform=ax.transAxes,
             **rmse_text_kwargs,
         )
-
     return ax, (legend_handles, legend_labels)
 
 
@@ -3774,11 +3799,37 @@ def _calc_min_individual_rmse__nb03_c23(y_true, predicted_df, model_cols):
             rmses.append(float(np.sqrt(np.nanmean(residual.to_numpy(dtype=float) ** 2))))
     return min(rmses) if rmses else np.nan
 
+def _calc_individual_rmse_range__nb03_c23(y_true, predicted_df, model_cols):
+    rmses = []
+    for col in model_cols:
+        if col not in predicted_df.columns:
+            continue
+        residual = pd.to_numeric(predicted_df[col], errors="coerce") - y_true
+        residual = residual.replace([np.inf, -np.inf], np.nan).dropna()
+        if len(residual):
+            rmses.append(float(np.sqrt(np.nanmean(residual.to_numpy(dtype=float) ** 2))))
+    if not rmses:
+        return (np.nan, np.nan)
+    return (float(np.nanmin(rmses)), float(np.nanmax(rmses)))
+
 def _format_rmse_value__nb03_c23(value, fmt):
     if value is None or not np.isfinite(value):
         return "NA"
     return format(float(value), fmt)
 
+def _format_rmse_range__nb03_c23(values, fmt):
+    if values is None:
+        return "NA"
+    if np.isscalar(values):
+        return _format_rmse_value__nb03_c23(values, fmt)
+    values_arr = np.asarray(values, dtype=float).ravel()
+    values_arr = values_arr[np.isfinite(values_arr)]
+    if values_arr.size == 0:
+        return "NA"
+    return (
+        f"{_format_rmse_value__nb03_c23(np.nanmin(values_arr), fmt)}-"
+        f"{_format_rmse_value__nb03_c23(np.nanmax(values_arr), fmt)}"
+    )
 def plot_temperature_residual_panel__nb03_c23(
     T_real,
     predicted_T_df,
@@ -3989,8 +4040,8 @@ def plot_temperature_residual_panel__nb03_c23(
                 bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor="none", alpha=0),
             )
         this_rmse = wf_rmse if workflow_rmse_override is None else workflow_rmse_override
-        individual_rmse = (
-            _calc_min_individual_rmse__nb03_c23(T_real_, predicted_, model_cols)
+        individual_rmse_range = (
+            _calc_individual_rmse_range__nb03_c23(T_real_, predicted_, model_cols)
             if individual_rmse_override is None
             else individual_rmse_override
         )
@@ -3998,11 +4049,10 @@ def plot_temperature_residual_panel__nb03_c23(
             *rmse_text_xy,
             "RMSE:\n"
             f"This study = {_format_rmse_value__nb03_c23(this_rmse, workflow_rmse_fmt)} $^\\circ$C\n"
-            f"Individual $\\geq$ {_format_rmse_value__nb03_c23(individual_rmse, individual_rmse_fmt)} $^\\circ$C",
+            f"Individual models = {_format_rmse_range__nb03_c23(individual_rmse_range, individual_rmse_fmt)} $^\\circ$C",
             transform=ax.transAxes,
             **rmse_text_kwargs,
         )
-
     return ax, (legend_handles, legend_labels)
 
 
