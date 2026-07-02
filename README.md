@@ -83,7 +83,6 @@ AIMS4PT_cpx evaluates and applies published clinopyroxene-based thermobarometers
 | -------------------------- | ---------------------------------------- | ------------------ | -------------------------------------- |
 | Putirka (2008)             | Clinopyroxene-only; clinopyroxene–liquid | `Putirka_08`       | `aims4pt.model_tools.Putirka_08`       |
 | Neave & Putirka (2017)     | Clinopyroxene–liquid                     | `Neave_Putirka_17` | `aims4pt.model_tools.Neave_Putirka_17` |
-| Brugman & Till (2019)      | Clinopyroxene–liquid                     | `Brugman_Till_19`  | `aims4pt.model_tools.Brugman_Till_19`  |
 | Petrelli et al. (2020)     | Clinopyroxene-only; clinopyroxene–liquid | `Petrelli20`       | `aims4pt.model_tools.Petrelli20`       |
 | Wang et al. (2021)         | Clinopyroxene-only                       | `Wang21`           | `aims4pt.model_tools.Wang_21`          |
 | Higgins et al. (2021)      | Clinopyroxene-only                       | `Higgins21`        | `aims4pt.model_tools.Higgins21`        |
@@ -96,7 +95,6 @@ Full references for the thermobarometer models are provided below for convenienc
 
 > Ágreda-López, M., Parodi, V., Musu, A., Jorgenson, C., Carfì, A., Mastrogiovanni, F., Caricchi, L., Perugini, D., & Petrelli, M. (2024). Enhancing machine learning thermobarometry for clinopyroxene-bearing magmas. *Computers & Geosciences*, 193, 105707. https://doi.org/10.1016/j.cageo.2024.105707
 
-> Brugman, K. K., & Till, C. B. (2019). A low-aluminum clinopyroxene-liquid geothermometer for high-silica magmatic systems. *American Mineralogist*, 104(7), 996–1004. https://doi.org/10.2138/am-2019-6842
 
 > Chicchi, L., Bindi, L., Fanelli, D., & Tommasini, S. (2023). Frontiers of thermobarometry: GAIA, a novel Deep Learning-based tool for volcano plumbing systems. *Earth and Planetary Science Letters*, 620, 118352. https://doi.org/10.1016/j.epsl.2023.118352
 

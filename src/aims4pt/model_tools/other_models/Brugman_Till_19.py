@@ -3,12 +3,10 @@
 from __future__ import annotations
 import pandas as pd
 
-import aims4pt.model_tools.data.BrugmanTill19 as BrugmanTill19_data
+import aims4pt.model_tools.other_models.data.BrugmanTill19 as BrugmanTill19_data
 from aims4pt.data_tools.compositions import calculate_cation_fractions, cpx_calculation
 from aims4pt.model_tools.ModelManager import ModelManager
 from aims4pt.model_tools.conventional_model import conventional_model
-# Import register_model
-from aims4pt.model_tools.model_registry import register_model
 from aims4pt.utils import get_oxides_list
 
 
@@ -86,7 +84,6 @@ class eq1_T(conventional_model):
         return T_C
 
 
-@register_model
 class Brugman_Till_19(ModelManager):
     '''
     Brugman, K. K., & Till, C. B. (2019). A low-aluminum clinopyroxene-liquid geothermometer for high-silica magmatic systems. American Mineralogist, 104(7), 996–1004. https://doi.org/10.2138/am-2019-6842

@@ -87,6 +87,7 @@ LIQ_OXIDES = [
 CPX_LEVELS = [(0.005, "cpx_0.5pct"), (0.010, "cpx_1pct")]
 LIQ_LEVELS = [(0.010, "liq_1pct"), (0.020, "liq_2pct"), (0.030, "liq_3pct")]
 KD_FINE_BIN_EDGES = np.array([0.20, 0.22, 0.24, 0.26, 0.28, 0.30, 0.32, 0.34, 0.36], dtype=float)
+KD_COARSE_BIN_EDGES = np.array([0.20, 0.24, 0.28, 0.32, 0.36], dtype=float)
 
 
 @dataclass(frozen=True)
@@ -179,8 +180,6 @@ def make_model_specs(method_type: str = "cpx_liq") -> list[ModelSpec]:
             if getattr(model, "cpx_only", None) is desired_cpx_only:
                 full_name = getattr(model, "model_name", type(model).__name__)
                 abbreviation = get_model_abbreviation(full_name, target_type)
-                if abbreviation == "BT19":
-                    continue
                 key = (method_type, target_type, abbreviation)
                 if key in seen:
                     continue
@@ -243,7 +242,7 @@ def predict_with_optional_cache(spec: ModelSpec, cpx: pd.DataFrame, liq: pd.Data
     return spec.model.predict(cpx, liq)
 
 
-def compatible_baseline(path: Path, test_ids: set[object]) -> pd.DataFrame | None:
+def compatible_baseline(path: Path, test_ids: set[object], expected_models: set[str], expected_rows: int) -> pd.DataFrame | None:
     """Load a compatible baseline table if possible."""
     try:
         df = pd.read_csv(path)
@@ -275,23 +274,31 @@ def compatible_baseline(path: Path, test_ids: set[object]) -> pd.DataFrame | Non
         get_model_abbreviation(model_name, target_type)
         for model_name, target_type in zip(df["model"], df["target_type"])
     ]
-    df = df[df["model"].ne("BT19")].copy()
+    df = df[df["model"].isin(expected_models)].copy()
+    if set(df["model"].dropna().astype(str)) != expected_models:
+        return None
+    if len(df) != expected_rows:
+        return None
     return df
 
 
 def normalize_output_model_names(df: pd.DataFrame) -> pd.DataFrame:
-    """Convert model names to Table 1 abbreviations and drop BT19."""
+    """Convert model names to Table 1 abbreviations."""
     out = df.copy()
     if {"model", "target_type"}.issubset(out.columns):
         out["model"] = [
             get_model_abbreviation(model_name, target_type)
             for model_name, target_type in zip(out["model"], out["target_type"])
         ]
-        out = out[out["model"].ne("BT19")].copy()
     return out
 
 
-def find_existing_baseline(output_dir: Path, test_ids: set[object]) -> tuple[pd.DataFrame | None, Path | None]:
+def find_existing_baseline(
+    output_dir: Path,
+    test_ids: set[object],
+    expected_models: set[str],
+    expected_rows: int,
+) -> tuple[pd.DataFrame | None, Path | None]:
     """Search likely baseline locations."""
     candidates = [
         output_dir / "baseline_cpx_liq_predictions_test_subset.csv",
@@ -307,7 +314,7 @@ def find_existing_baseline(output_dir: Path, test_ids: set[object]) -> tuple[pd.
         if path in seen or not path.exists():
             continue
         seen.add(path)
-        loaded = compatible_baseline(path, test_ids)
+        loaded = compatible_baseline(path, test_ids, expected_models, expected_rows)
         if loaded is not None:
             return loaded, path
     return None, None
@@ -322,8 +329,10 @@ def compute_baseline(
     """Create or reuse the baseline prediction table."""
     baseline_path = output_dir / "baseline_cpx_liq_predictions_test_subset.csv"
     test_ids = set(test_df["id"])
+    expected_models = {spec.name for spec in specs}
+    expected_rows = len(test_df) * len(specs)
     if reuse_existing:
-        existing, source = find_existing_baseline(output_dir, test_ids)
+        existing, source = find_existing_baseline(output_dir, test_ids, expected_models, expected_rows)
         if existing is not None:
             existing.to_csv(baseline_path, index=False)
             print(f"Reused baseline predictions from: {source}")
@@ -512,9 +521,15 @@ def run_kd_analysis(test_df: pd.DataFrame, baseline: pd.DataFrame, paths: dict[s
         )
     bin_df = pd.DataFrame(summary_rows)
     bin_df.to_csv(paths["kd"] / "kd_bin_summary_by_model_test_subset.csv", index=False)
-    fine_iqr_df, fine_count_df = kd_fine_bin_residual_iqr(merged)
+    fine_iqr_df, fine_count_df = kd_fine_bin_residual_iqr(merged, KD_FINE_BIN_EDGES)
     fine_iqr_df.to_csv(paths["kd"] / "kd_bin_residual_iqr_0p02_by_model_test_subset.csv", index=False)
     fine_count_df.to_csv(paths["kd"] / "kd_bin_counts_0p02_test_subset.csv", index=False)
+    coarse_iqr_df, coarse_count_df = kd_fine_bin_residual_iqr(merged, KD_COARSE_BIN_EDGES)
+    coarse_iqr_df.to_csv(paths["kd"] / "kd_bin_residual_iqr_0p04_by_model_test_subset.csv", index=False)
+    coarse_count_df.to_csv(paths["kd"] / "kd_bin_counts_0p04_test_subset.csv", index=False)
+    fine_abs_iqr_df, fine_abs_count_df = kd_fine_bin_residual_iqr(merged, KD_FINE_BIN_EDGES, absolute=True)
+    fine_abs_iqr_df.to_csv(paths["kd"] / "kd_bin_abs_residual_iqr_0p02_by_model_test_subset.csv", index=False)
+    fine_abs_count_df.to_csv(paths["kd"] / "kd_bin_abs_counts_0p02_test_subset.csv", index=False)
 
     log_rows = [
         {"metric": "test_subset_rows", "value": len(test_df)},
@@ -526,7 +541,18 @@ def run_kd_analysis(test_df: pd.DataFrame, baseline: pd.DataFrame, paths: dict[s
     ]
     pd.DataFrame(log_rows).to_csv(paths["kd"] / "kd_analysis_log_test_subset.csv", index=False)
 
-    figure_count = plot_kd_figures(merged, reg_df, bin_df, fine_iqr_df, fine_count_df, paths["kd_fig"])
+    figure_count = plot_kd_figures(
+        merged,
+        reg_df,
+        bin_df,
+        fine_iqr_df,
+        fine_count_df,
+        coarse_iqr_df,
+        coarse_count_df,
+        fine_abs_iqr_df,
+        fine_abs_count_df,
+        paths["kd_fig"],
+    )
     valid_kd = int(kd_values["Kd_FeMg"].notna().sum())
     outside_kd = int((kd_values["Kd_FeMg"].notna() & ~kd_values["Kd_FeMg"].between(0.20, 0.36)).sum())
     print(f"Valid Kd values: {valid_kd}")
@@ -534,16 +560,22 @@ def run_kd_analysis(test_df: pd.DataFrame, baseline: pd.DataFrame, paths: dict[s
     return kd_values, valid_kd, outside_kd
 
 
-def save_current_fig(path: Path) -> None:
+def save_current_fig(path: Path, *, use_tight_layout: bool = True, bbox_inches: str | None = "tight") -> None:
     """Save and close the active figure."""
-    plt.tight_layout()
-    plt.savefig(path, dpi=300, bbox_inches="tight")
+    if use_tight_layout:
+        plt.tight_layout()
+    plt.savefig(path, dpi=300, bbox_inches=bbox_inches)
     plt.close()
 
 
-def kd_fine_bin_residual_iqr(merged: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Summarize residual distributions in 0.02-wide Kd bins."""
-    edges = KD_FINE_BIN_EDGES.astype(float).copy()
+def kd_fine_bin_residual_iqr(
+    merged: pd.DataFrame,
+    bin_edges: np.ndarray,
+    *,
+    absolute: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Summarize residual distributions in fixed-width Kd bins."""
+    edges = np.asarray(bin_edges, dtype=float).copy()
     cut_edges = edges.copy()
     cut_edges[-1] += 1e-9
     labels = [f"{edges[i]:.2f}-{edges[i + 1]:.2f}" for i in range(len(edges) - 1)]
@@ -551,13 +583,13 @@ def kd_fine_bin_residual_iqr(merged: pd.DataFrame) -> tuple[pd.DataFrame, pd.Dat
 
     sample_level = merged[["id", "Kd_FeMg"]].drop_duplicates().copy()
     sample_level = sample_level[sample_level["Kd_FeMg"].between(edges[0], edges[-1], inclusive="both")]
-    sample_level["Kd_bin_0p02"] = pd.cut(
+    sample_level["Kd_bin"] = pd.cut(
         sample_level["Kd_FeMg"], bins=cut_edges, labels=labels, include_lowest=True, right=False
     )
     count_rows = []
     for label in labels:
-        part = sample_level[sample_level["Kd_bin_0p02"].astype(str).eq(label)]
-        count_rows.append({"Kd_bin_0p02": label, "Kd_bin_center": centers[label], "sample_n": int(part["id"].nunique())})
+        part = sample_level[sample_level["Kd_bin"].astype(str).eq(label)]
+        count_rows.append({"Kd_bin": label, "Kd_bin_center": centers[label], "sample_n": int(part["id"].nunique())})
     count_df = pd.DataFrame(count_rows)
 
     plot_rows: list[dict[str, object]] = []
@@ -573,16 +605,17 @@ def kd_fine_bin_residual_iqr(merged: pd.DataFrame) -> tuple[pd.DataFrame, pd.Dat
         ].copy()
         if data.empty:
             continue
-        data["Kd_bin_0p02"] = pd.cut(data["Kd_FeMg"], bins=cut_edges, labels=labels, include_lowest=True, right=False)
-        for (model, kd_bin), group in data.groupby(["model", "Kd_bin_0p02"], observed=False):
+        data["Kd_bin"] = pd.cut(data["Kd_FeMg"], bins=cut_edges, labels=labels, include_lowest=True, right=False)
+        for (model, kd_bin), group in data.groupby(["model", "Kd_bin"], observed=False):
             if pd.isna(kd_bin) or group.empty:
                 continue
-            residual = group[residual_col].astype(float)
+            residual = group[residual_col].astype(float).abs() if absolute else group[residual_col].astype(float)
             plot_rows.append(
                 {
                     "model": model,
                     "target_type": target_type,
-                    "Kd_bin_0p02": str(kd_bin),
+                    "value_metric": "absolute_residual" if absolute else "signed_residual",
+                    "Kd_bin": str(kd_bin),
                     "Kd_bin_center": centers[str(kd_bin)],
                     "n": int(len(residual)),
                     "sample_n": int(group["id"].nunique()),
@@ -596,7 +629,16 @@ def kd_fine_bin_residual_iqr(merged: pd.DataFrame) -> tuple[pd.DataFrame, pd.Dat
     return pd.DataFrame(plot_rows), count_df
 
 
-def plot_kd_residual_iqr_composite(fine_iqr_df: pd.DataFrame, count_df: pd.DataFrame, fig_dir: Path) -> int:
+def plot_kd_residual_iqr_composite(
+    fine_iqr_df: pd.DataFrame,
+    count_df: pd.DataFrame,
+    fig_dir: Path,
+    *,
+    bin_edges: np.ndarray,
+    bin_width_label: str,
+    filename_suffix: str = "",
+    absolute: bool = False,
+) -> int:
     """Plot pressure and temperature Kd-bin residual IQR summaries in one PIL-rendered figure."""
     if fine_iqr_df.empty:
         return 0
@@ -617,7 +659,7 @@ def plot_kd_residual_iqr_composite(fine_iqr_df: pd.DataFrame, count_df: pd.DataF
         "Pu08_31": "#7A828F",
         "Pu08_33": "#7A828F",
     }
-    edges = KD_FINE_BIN_EDGES.astype(float)
+    edges = np.asarray(bin_edges, dtype=float)
     centers = (edges[:-1] + edges[1:]) / 2
     count_map = {round(float(row["Kd_bin_center"]), 2): int(row["sample_n"]) for _, row in count_df.iterrows()}
     n_by_center = [count_map.get(round(float(center), 2), 0) for center in centers]
@@ -685,17 +727,28 @@ def plot_kd_residual_iqr_composite(fine_iqr_df: pd.DataFrame, count_df: pd.DataF
     def draw_open_circle(x: int, y: int, radius: int, color: tuple[int, int, int]) -> None:
         draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=panel_bg, outline=color, width=5)
 
-    title = "Kd-bin residual distributions"
+    title = "Kd-bin absolute deviation distributions" if absolute else "Kd-bin residual distributions"
     subtitle = (
-        "Bins span Kd = 0.20-0.36 at 0.02 width; points show median residual and vertical bars show Q1-Q3. "
+        f"Bins span Kd = 0.20-0.36 at {bin_width_label} width; "
+        f"points show {'median absolute residual' if absolute else 'median residual'} and vertical bars show Q1-Q3. "
         "Grey n labels are unique sample counts per bin."
     )
     draw.text((left, 40), title, font=fonts["title"], fill=ink)
     draw.text((left, 115), subtitle, font=fonts["subtitle"], fill=muted)
 
     target_specs = [
-        ("P", "a", "Pressure residual by Kd bin", "Residual, predicted - true (kbar)"),
-        ("T", "b", "Temperature residual by Kd bin", "Residual, predicted - true (deg C)"),
+        (
+            "P",
+            "a",
+            "Pressure absolute deviation by Kd bin" if absolute else "Pressure residual by Kd bin",
+            "|Predicted - true| (kbar)" if absolute else "Residual, predicted - true (kbar)",
+        ),
+        (
+            "T",
+            "b",
+            "Temperature absolute deviation by Kd bin" if absolute else "Temperature residual by Kd bin",
+            "|Predicted - true| (deg C)" if absolute else "Residual, predicted - true (deg C)",
+        ),
     ]
     for top, (target_type, letter, panel_title, ylabel) in zip(panel_top, target_specs):
         data = fine_iqr_df[fine_iqr_df["target_type"].eq(target_type)].copy()
@@ -705,12 +758,12 @@ def plot_kd_residual_iqr_composite(fine_iqr_df: pd.DataFrame, count_df: pd.DataF
         finite = data[["residual_q1", "median_residual", "residual_q3"]].to_numpy(dtype=float).ravel() if not data.empty else np.array([])
         finite = finite[np.isfinite(finite)]
         if finite.size:
-            y_min = min(float(np.min(finite)), 0.0)
+            y_min = 0.0 if absolute else min(float(np.min(finite)), 0.0)
             y_max = max(float(np.max(finite)), 0.0)
         else:
-            y_min, y_max = -1.0, 1.0
+            y_min, y_max = (0.0, 1.0) if absolute else (-1.0, 1.0)
         pad = max((y_max - y_min) * 0.12, 0.5 if target_type == "P" else 8.0)
-        y_min -= pad
+        y_min = 0.0 if absolute else y_min - pad
         y_max += pad
         y_ticks = target_y_ticks(y_min, y_max)
         y_min = min(y_min, min(y_ticks))
@@ -747,8 +800,9 @@ def plot_kd_residual_iqr_composite(fine_iqr_df: pd.DataFrame, count_df: pd.DataF
 
         draw.line((left, bottom, right, bottom), fill=axis, width=4)
         draw.line((left, top, left, bottom), fill=axis, width=4)
-        zero_y = y_to_px(0.0)
-        draw_dashed_horizontal(left, right, zero_y, color=ink)
+        if not absolute:
+            zero_y = y_to_px(0.0)
+            draw_dashed_horizontal(left, right, zero_y, color=ink)
         kd_ref_x = x_to_px(0.28)
         draw_dashed_vertical(kd_ref_x, top, bottom, color=muted, dash=14, gap=13)
         ref_label = "Kd = 0.28"
@@ -790,7 +844,7 @@ def plot_kd_residual_iqr_composite(fine_iqr_df: pd.DataFrame, count_df: pd.DataF
                 draw_open_circle(legend_x + 30, y + 15, 10, color)
                 draw.text((legend_x + 82, y - 4), str(model), font=fonts["legend"], fill=ink)
 
-    out_path = fig_dir / "test_subset_kd_bin_residual_iqr_composite.png"
+    out_path = fig_dir / f"test_subset_kd_bin_residual_iqr_composite{filename_suffix}.png"
     image.save(out_path, dpi=(600, 600))
     return 1
 
@@ -801,6 +855,10 @@ def plot_kd_figures(
     bin_df: pd.DataFrame,
     fine_iqr_df: pd.DataFrame,
     fine_count_df: pd.DataFrame,
+    coarse_iqr_df: pd.DataFrame,
+    coarse_count_df: pd.DataFrame,
+    fine_abs_iqr_df: pd.DataFrame,
+    fine_abs_count_df: pd.DataFrame,
     fig_dir: Path,
 ) -> int:
     """Generate Kd figures."""
@@ -808,7 +866,30 @@ def plot_kd_figures(
         old_png.unlink()
     count = 0
     sns.set_theme(style="whitegrid", context="paper")
-    count += plot_kd_residual_iqr_composite(fine_iqr_df, fine_count_df, fig_dir)
+    count += plot_kd_residual_iqr_composite(
+        fine_iqr_df,
+        fine_count_df,
+        fig_dir,
+        bin_edges=KD_FINE_BIN_EDGES,
+        bin_width_label="0.02",
+    )
+    count += plot_kd_residual_iqr_composite(
+        coarse_iqr_df,
+        coarse_count_df,
+        fig_dir,
+        bin_edges=KD_COARSE_BIN_EDGES,
+        bin_width_label="0.04",
+        filename_suffix="_0p04",
+    )
+    count += plot_kd_residual_iqr_composite(
+        fine_abs_iqr_df,
+        fine_abs_count_df,
+        fig_dir,
+        bin_edges=KD_FINE_BIN_EDGES,
+        bin_width_label="0.02",
+        filename_suffix="_abs_0p02",
+        absolute=True,
+    )
     return count
     for (model, target_type), group in merged.groupby(["model", "target_type"]):
         residual_col = "delta_P" if target_type == "P" else "delta_T"
@@ -1227,11 +1308,24 @@ def plot_analytical_figures(long_df: pd.DataFrame, fig_dir: Path) -> int:
             if matrix.empty:
                 continue
             fig, ax = plt.subplots(figsize=(max(6, 0.45 * len(matrix.columns)), max(3, 0.42 * len(matrix.index))))
-            sns.heatmap(matrix, cmap="mako", ax=ax, cbar_kws={"label": f"Median abs effect ({unit})"})
+            values = matrix.to_numpy(dtype=float)
+            cmap = sns.color_palette("mako", as_cmap=True).copy()
+            cmap.set_bad("#F1F2F4")
+            image = ax.imshow(np.ma.masked_invalid(values), aspect="auto", cmap=cmap)
+            ax.set_xticks(np.arange(len(matrix.columns)))
+            ax.set_xticklabels(matrix.columns, rotation=45, ha="right")
+            ax.set_yticks(np.arange(len(matrix.index)))
+            ax.set_yticklabels(matrix.index)
+            fig.colorbar(image, ax=ax, label=f"Median abs effect ({unit})")
             ax.set_title(f"{label.capitalize()} sensitivity: {token}")
             ax.set_xlabel("")
             ax.set_ylabel("")
-            save_current_fig(fig_dir / f"test_subset_{label}_heatmap_{token}.png")
+            fig.subplots_adjust(left=0.22, right=0.88, bottom=0.32, top=0.86)
+            save_current_fig(
+                fig_dir / f"test_subset_{label}_heatmap_{token}.png",
+                use_tight_layout=False,
+                bbox_inches=None,
+            )
             count += 1
 
     largest = ok[((ok["phase"].eq("cpx")) & (ok["rel_error"].eq(0.010))) | ((ok["phase"].eq("liq")) & (ok["rel_error"].eq(0.030)))]
@@ -1306,13 +1400,20 @@ def run_directional_equal_error_analysis(
 
     if reuse_existing and long_path.exists():
         candidate = pd.read_csv(long_path, low_memory=False)
-        if len(candidate) == expected_rows and set(candidate["model_type"].dropna()) == {"cpx_liq", "cpx_only"}:
+        expected_models = {spec.name for spec in specs}
+        actual_models = set(candidate["model"].dropna().astype(str))
+        if (
+            len(candidate) == expected_rows
+            and set(candidate["model_type"].dropna()) == {"cpx_liq", "cpx_only"}
+            and actual_models == expected_models
+        ):
             long_df = candidate
             print(f"Reused directional equal-error OAT results: {long_path}")
         else:
             print(
                 "Existing directional equal-error OAT results are not compatible; "
-                f"recomputing. rows={len(candidate)}, expected_rows={expected_rows}"
+                f"recomputing. rows={len(candidate)}, expected_rows={expected_rows}, "
+                f"models={sorted(actual_models)}"
             )
             long_df = compute_directional_equal_error_long(test_df, specs, long_path)
     else:
@@ -1342,9 +1443,10 @@ def compute_directional_equal_error_long(
     if source_path.exists():
         source_rows = pd.read_csv(source_path, low_memory=False)
         source_rows = normalize_output_model_names(source_rows)
+        expected_models = {spec.name for spec in specs}
         source_rows = source_rows[
             source_rows["sign"].eq("plus")
-            & source_rows["model"].ne("BT19")
+            & source_rows["model"].isin(expected_models)
             & (
                 (source_rows["phase"].eq("cpx") & source_rows["rel_error"].eq(0.010))
                 | (source_rows["phase"].eq("liq") & source_rows["rel_error"].isin([0.010, 0.020]))
@@ -2392,6 +2494,8 @@ def verify_outputs(paths: dict[str, Path]) -> list[Path]:
     """Return all required figure paths that are missing."""
     required = [
         paths["kd_fig"] / "test_subset_kd_bin_residual_iqr_composite.png",
+        paths["kd_fig"] / "test_subset_kd_bin_residual_iqr_composite_0p04.png",
+        paths["kd_fig"] / "test_subset_kd_bin_residual_iqr_composite_abs_0p02.png",
         paths["analytical_fig"] / "test_subset_pressure_heatmap_cpx_0p5pct.png",
         paths["analytical_fig"] / "test_subset_pressure_heatmap_cpx_1pct.png",
         paths["analytical_fig"] / "test_subset_pressure_heatmap_liq_1pct.png",

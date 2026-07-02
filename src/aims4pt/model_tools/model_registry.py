@@ -9,7 +9,6 @@ MODEL_REGISTRY: dict = {}
 ALL_MODELS_MODULES = [
     "aims4pt.model_tools.Putirka_08",
     "aims4pt.model_tools.Neave_Putirka_17",
-    "aims4pt.model_tools.Brugman_Till_19",
     "aims4pt.model_tools.Petrelli20",
     "aims4pt.model_tools.Higgins21",
     "aims4pt.model_tools.Jorgenson22",

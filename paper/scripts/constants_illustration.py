@@ -53,7 +53,6 @@ TEMPERATURE_MODEL_ABBREVIATIONS = {
     # cpx-liq
     "Putirka, 2008 eq33_T; eq31_P": "Pu08_33",
     "Putirka, 2008 eq33_T; eq31_P (cpx_liq)": "Pu08_33",
-    "Brugman & Till, 2019 (cpx_liq)": "BT19",
     "Petrelli et al., 2020 (cpx_liq)": "Pet20",
     "Jorgenson et al., 2022 (cpx_liq)": "Jor22",
     "Chicchi et al., 2023 (cpx_liq)": "Chi23",

@@ -1327,12 +1327,6 @@ MODEL_STYLE__nb00_c24 = {
         "group": "small",
         "group_label": "Small group (0 < N < 500)",
     },
-    "BT19": {
-        "color": "#004C7A",
-        "plot_order": 8,
-        "group": "small",
-        "group_label": "Small group (0 < N < 500)",
-    },
 }
 MODEL_STYLE_LOOKUP__nb00_c24 = {
     key.casefold(): key for key in MODEL_STYLE__nb00_c24
