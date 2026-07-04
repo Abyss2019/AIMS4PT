@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, BinaryIO
 import numpy as np
 import pandas as pd
 
+from aims4pt.utils import normalize_column_names
+
 if TYPE_CHECKING:
     from aims4pt.model_tools.CpxTBSelect import workflow_thermobarometry
     from aims4pt.model_tools.ModelManager import ModelManager
@@ -46,6 +48,23 @@ MODEL_PLOT_COLORS = (
 
 MGO_MOLAR_MASS = 40.3044
 FEO_MOLAR_MASS = 71.844
+REPORT_OXIDE_COLUMNS = (
+    "SiO2",
+    "TiO2",
+    "Al2O3",
+    "FeO",
+    "Fe2O3",
+    "MgO",
+    "CaO",
+    "Na2O",
+    "K2O",
+    "MnO",
+    "Cr2O3",
+    "NiO",
+    "P2O5",
+    "H2O",
+    "CO2",
+)
 
 
 def _model_summary_row(model: ModelManager, target: str) -> dict:
@@ -199,12 +218,107 @@ def _find_column(df: pd.DataFrame, candidates: tuple[str, ...]) -> object | None
     return None
 
 
+def _compact_name(value: object) -> str:
+    """Return a lowercase alphanumeric key for loose column matching."""
+    return re.sub(r"[^a-z0-9]+", "", str(value).strip().lower())
+
+
+def _candidate_phase(candidates: tuple[str, ...]) -> str | None:
+    """Infer phase from candidate names."""
+    compact_candidates = [_compact_name(candidate) for candidate in candidates]
+    if any("cpx" in candidate for candidate in compact_candidates):
+        return "cpx"
+    if any(
+        phase_token in candidate
+        for candidate in compact_candidates
+        for phase_token in ("liq", "liquid", "melt", "glass")
+    ):
+        return "liq"
+    return None
+
+
+def _candidate_oxide(candidates: tuple[str, ...]) -> str | None:
+    """Infer the standard oxide name requested by candidate names."""
+    compact_candidates = [_compact_name(candidate) for candidate in candidates]
+    for oxide in REPORT_OXIDE_COLUMNS:
+        oxide_key = _compact_name(oxide)
+        if any(oxide_key in candidate for candidate in compact_candidates):
+            return oxide
+    if any(
+        "feot" in candidate or "feotot" in candidate
+        for candidate in compact_candidates
+    ):
+        return "FeO"
+    return None
+
+
+def _phase_source_columns(df: pd.DataFrame, phase: str) -> list[object]:
+    """Select source columns for one phase before oxide normalization."""
+    explicit_phase_columns: list[object] = []
+    unphased_columns: list[object] = []
+
+    other_phase_tokens = (
+        ("liq", "liquid", "melt", "glass") if phase == "cpx" else ("cpx",)
+    )
+    phase_tokens = ("cpx",) if phase == "cpx" else ("liq", "liquid", "melt", "glass")
+
+    for column in df.columns:
+        compact = _compact_name(column)
+        if any(token in compact for token in phase_tokens):
+            explicit_phase_columns.append(column)
+        elif not any(token in compact for token in other_phase_tokens):
+            unphased_columns.append(column)
+
+    if explicit_phase_columns:
+        return explicit_phase_columns
+    if phase == "cpx":
+        return unphased_columns
+    return []
+
+
+def _normalized_phase_column(
+    df: pd.DataFrame,
+    phase: str,
+    oxide: str,
+) -> pd.Series | None:
+    """Return an oxide column after phase-aware column normalization."""
+    source_columns = _phase_source_columns(df, phase)
+    if not source_columns:
+        return None
+
+    try:
+        normalized_df = normalize_column_names(
+            df[source_columns],
+            standard_names_list=list(REPORT_OXIDE_COLUMNS),
+            missing_fill=None,
+            drop_missing=False,
+            report_info=False,
+        )
+    except Exception:
+        return None
+
+    if oxide not in normalized_df.columns:
+        return None
+    series = pd.to_numeric(normalized_df[oxide], errors="coerce")
+    if series.notna().sum() == 0:
+        return None
+    return series
+
+
 def _numeric_column(df: pd.DataFrame, candidates: tuple[str, ...]) -> pd.Series | None:
     """Return one numeric source column, or None if no candidate exists."""
     column = _find_column(df, candidates)
-    if column is None:
+    if column is not None:
+        series = pd.to_numeric(df[column], errors="coerce")
+        if series.notna().sum() > 0:
+            return series
+
+    phase = _candidate_phase(candidates)
+    oxide = _candidate_oxide(candidates)
+    if phase is None or oxide is None:
         return None
-    return pd.to_numeric(df[column], errors="coerce")
+    return _normalized_phase_column(df, phase, oxide)
+
 
 
 def _phase_mg_number(df: pd.DataFrame, phase: str) -> pd.Series | None:

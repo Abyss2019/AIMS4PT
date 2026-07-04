@@ -1006,6 +1006,13 @@ def _selected_rank_set_from_topk(
             return {0}
         return {0, 1}
 
+    if mode in {"above_threshold", "gt_threshold", "all_gt_threshold"}:
+        return {
+            rank_i
+            for rank_i, (_, pct) in enumerate(topk)
+            if float(pct) > float(threshold)
+        }
+
     if mode == "cumulative":
         selected = set()
         cumulative_pct = 0.0
@@ -1017,7 +1024,9 @@ def _selected_rank_set_from_topk(
                 break
         return selected
 
-    raise ValueError("model_selection_mode must be 'cumulative' or 'top1_or_top2'.")
+    raise ValueError(
+        "model_selection_mode must be 'cumulative', 'top1_or_top2', or 'above_threshold'."
+    )
 
 
 def _finite_uncertainty(value: Any) -> Optional[float]:
@@ -1143,10 +1152,18 @@ def _model_axis_label(model_name: str, kind: Optional[str] = None, *, use_model_
 def _display_phase_type_label(value: Any) -> str:
     label = _clean_str(value)
     key = label.lower().replace("_", "-").replace(" ", "-")
+    if key in {"cpx", "clinopyroxene"}:
+        return "Clinopyroxene"
     if key in {"cpx-only", "clinopyroxene-only"}:
         return "Clinopyroxene-only"
     if key in {"cpx-liq", "cpx-liquid", "clinopyroxene-liquid"}:
         return "Clinopyroxene-liquid"
+    if key in {"amph", "amphibole"}:
+        return "Amphibole"
+    if key in {"amph-only", "amphibole-only"}:
+        return "Amphibole-only"
+    if key in {"amph-liq", "amph-liquid", "amphibole-liquid"}:
+        return "Amphibole-liquid"
     if key == "melt-inclusion":
         return "Melt\ninclusion"
     return label
@@ -1216,9 +1233,13 @@ def _draw_violin(
 
     if "cmedians" in vp:
         vp["cmedians"].set_color("k")
-        vp["cmedians"].set_linewidth(max(lw, 1.2))
-        vp["cmedians"].set_alpha(alpha)
-        vp["cmedians"].set_zorder(zorder + 1.15)
+        vp["cmedians"].set_linewidth(max(lw * 1.35, 1.8))
+        vp["cmedians"].set_alpha(1.0)
+        vp["cmedians"].set_zorder(zorder + 2.0)
+        vp["cmedians"].set_path_effects([
+            pe.Stroke(linewidth=max(lw * 2.0, 2.6), foreground="white", alpha=0.85),
+            pe.Normal(),
+        ])
 
     if not show_quartile_interval:
         return vp
@@ -1315,10 +1336,13 @@ def _style_selected_violin(
     body_idx: int,
     *,
     edgecolor: str = "k",
+    facecolor: Optional[str] = None,
     lw: float = 3.0,
     linestyle: str = "--",
 ) -> None:
     body = vp["bodies"][body_idx]
+    if facecolor is not None:
+        body.set_facecolor(facecolor)
     body.set_edgecolor(edgecolor)
     body.set_linewidth(lw)
     body.set_linestyle(linestyle)
@@ -1359,33 +1383,65 @@ def _redraw_violin_median(
     )
 
 
-def _draw_selected_model_summary_lines(
-    ax: plt.Axes,
-    x_center: float,
-    values: Sequence[float],
-    width: float,
-    *,
-    color: str,
-    x_span: Optional[tuple[float, float]] = None,
-    zorder: float = 5.0,
-) -> None:
-    """Draw min, median, and max horizontal lines for a selected model."""
+def _model_median_after_tukey(values: Sequence[float]) -> Optional[float]:
     clean_values = _remove_boxplot_outliers(values)
     if clean_values.size == 0:
-        return
-    y_min = float(np.nanmin(clean_values))
-    y_med = float(np.nanmedian(clean_values))
-    y_max = float(np.nanmax(clean_values))
-    if x_span is None:
-        x0 = float(x_center) - width * 0.42
-        x1 = float(x_center) + width * 0.42
+        return None
+    median = float(np.nanmedian(clean_values))
+    return median if np.isfinite(median) else None
+
+
+def _model_medians_for_indices(data_all: Sequence[np.ndarray], indices: Sequence[int]) -> np.ndarray:
+    medians = []
+    for idx in indices:
+        if idx < 0 or idx >= len(data_all):
+            continue
+        median = _model_median_after_tukey(data_all[idx])
+        if median is not None:
+            medians.append(median)
+    return np.asarray(medians, dtype=float)
+
+
+def _expand_flat_median_range(y0: float, y1: float, reference_values: Sequence[float]) -> tuple[float, float]:
+    if y1 > y0:
+        return y0, y1
+    reference = np.asarray(reference_values, dtype=float).ravel()
+    reference = reference[np.isfinite(reference)]
+    if reference.size >= 2:
+        reference_span = float(np.nanmax(reference) - np.nanmin(reference))
     else:
-        x0, x1 = map(float, x_span)
-    line_effects = [pe.Stroke(linewidth=4.5, foreground="white", alpha=0.86), pe.Normal()]
-    range_lines = ax.hlines([y_min, y_max], x0, x1, color=color, lw=2.0, alpha=0.98, zorder=zorder)
-    median_line = ax.hlines(y_med, x0, x1, color=color, lw=3.4, alpha=1.0, zorder=zorder + 0.1)
-    range_lines.set_path_effects(line_effects)
-    median_line.set_path_effects(line_effects)
+        reference_span = 0.0
+    min_height = reference_span * 0.04 if reference_span > 0 else max(abs(y0) * 0.002, 1e-6)
+    return y0 - min_height / 2.0, y1 + min_height / 2.0
+
+
+def _draw_median_range_band(
+    ax: plt.Axes,
+    x_span: tuple[float, float],
+    medians: Sequence[float],
+    *,
+    color: str,
+    alpha: float,
+    zorder: float,
+    edgecolor: Optional[str] = None,
+    edge_lw: float = 0.0,
+    edge_alpha: float = 1.0,
+    edge_zorder: Optional[float] = None,
+    reference_values: Optional[Sequence[float]] = None,
+) -> None:
+    medians_arr = np.asarray(medians, dtype=float).ravel()
+    medians_arr = medians_arr[np.isfinite(medians_arr)]
+    if medians_arr.size == 0:
+        return
+    y0 = float(np.nanmin(medians_arr))
+    y1 = float(np.nanmax(medians_arr))
+    reference = reference_values if reference_values is not None else medians_arr
+    y0, y1 = _expand_flat_median_range(y0, y1, reference)
+    x0, x1 = map(float, x_span)
+    ax.fill_between([x0, x1], [y0, y0], [y1, y1], color=color, alpha=alpha, linewidth=0, zorder=zorder)
+    if edgecolor is not None and edge_lw > 0:
+        line_zorder = zorder + 0.2 if edge_zorder is None else edge_zorder
+        ax.hlines([y0, y1], x0, x1, color=edgecolor, lw=edge_lw, alpha=edge_alpha, zorder=line_zorder)
 
 def _redraw_violin_quartiles(
     ax: plt.Axes,
@@ -1821,6 +1877,8 @@ def _plot_ranked_this_study_kind_panel(
     uncertainty_band_width = violin_width * 0.72
     color_06 = "blue"
     color_10 = "red"
+    unselected_color_06 = _blend_color(color_06, "white", 0.34)
+    unselected_color_10 = _blend_color(color_10, "white", 0.34)
     highlight_06 = "#20b8c5"
     highlight_10 = "#f28e2b"
 
@@ -1861,10 +1919,10 @@ def _plot_ranked_this_study_kind_panel(
         kind_state["data"]["2006"],
         positions_06,
         widths=violin_width,
-        facecolor=color_06,
+        facecolor=unselected_color_06,
         edgecolor="k",
         lw=edge_lw_default,
-        alpha=0.6,
+        alpha=1.0,
         bw_method=0.25,
         show_quartile_interval=show_quartile_interval,
     )
@@ -1873,10 +1931,10 @@ def _plot_ranked_this_study_kind_panel(
         kind_state["data"]["2010"],
         positions_10,
         widths=violin_width,
-        facecolor=color_10,
+        facecolor=unselected_color_10,
         edgecolor="k",
         lw=edge_lw_default,
-        alpha=0.6,
+        alpha=1.0,
         bw_method=0.25,
         show_quartile_interval=show_quartile_interval,
     )
@@ -1920,6 +1978,33 @@ def _plot_ranked_this_study_kind_panel(
                 zorder=2.15,
             )
 
+    def _draw_section_median_range_bands(
+        data_all: Sequence[np.ndarray],
+        selected_indices: set[int],
+        phase_type: str,
+        idx_shift: int,
+        selected_color: str,
+    ) -> None:
+        n_phase_models = len(kind_state["columns"][phase_type])
+        section_indices = list(range(idx_shift, idx_shift + n_phase_models))
+        selected_section_indices = [idx for idx in section_indices if idx in selected_indices]
+        section_span = (0.5, split_idx + 0.5) if phase_type == "cpx_only" else (split_idx + 0.5, n_cols + 0.5)
+        all_medians = _model_medians_for_indices(data_all, section_indices)
+        selected_medians = _model_medians_for_indices(data_all, selected_section_indices)
+        _draw_median_range_band(
+            ax,
+            section_span,
+            selected_medians,
+            color=selected_color,
+            alpha=0.15,
+            zorder=1.05,
+            edgecolor=selected_color,
+            edge_lw=1.9,
+            edge_alpha=0.95,
+            edge_zorder=2.05,
+            reference_values=all_medians,
+        )
+
     def _annotate_all_pcts(
         rank_pcts: Sequence[tuple[str, float]],
         phase_type: str,
@@ -1956,9 +2041,8 @@ def _plot_ranked_this_study_kind_panel(
         idx_shift: int,
         positions_used: np.ndarray,
         data_all: Sequence[np.ndarray],
-        bg_color: str,
+        selected_facecolor: str,
     ) -> None:
-        section_span = (0.5, split_idx + 0.5) if phase_type == "cpx_only" else (split_idx + 0.5, n_cols + 0.5)
         selected_ranks = _selected_rank_set_from_topk(
             rank_pcts,
             threshold=selection_threshold,
@@ -1972,21 +2056,17 @@ def _plot_ranked_this_study_kind_panel(
             if idx_local is None:
                 continue
             idx = idx_shift + idx_local
-            _style_selected_violin(vp, idx, edgecolor="k", lw=edge_lw_selected, linestyle="--")
-            if show_selected_model_summary:
-                _draw_selected_model_summary_lines(
-                    ax,
-                    positions_used[idx],
-                    data_all[idx],
-                    violin_width,
-                    color=bg_color,
-                    x_span=section_span,
-                    zorder=5.0,
-                )
+            _style_selected_violin(vp, idx, edgecolor="k", facecolor=selected_facecolor, lw=edge_lw_selected, linestyle="--")
 
     if show_uncertainty_band:
         _draw_all_uncertainty(positions_06, kind_state["data"]["2006"], "lightgray")
         _draw_all_uncertainty(positions_10, kind_state["data"]["2010"], "lightgray")
+
+    if show_selected_model_summary:
+        _draw_section_median_range_bands(kind_state["data"]["2006"], selected_06, "cpx_only", 0, highlight_06)
+        _draw_section_median_range_bands(kind_state["data"]["2006"], selected_06, "cpx_liq", split_idx, highlight_06)
+        _draw_section_median_range_bands(kind_state["data"]["2010"], selected_10, "cpx_only", 0, highlight_10)
+        _draw_section_median_range_bands(kind_state["data"]["2010"], selected_10, "cpx_liq", split_idx, highlight_10)
 
     if show_rank_percent_annotations:
         _annotate_all_pcts(
@@ -2003,17 +2083,19 @@ def _plot_ranked_this_study_kind_panel(
         )
 
     _highlight_selected(
-        vp06, kind_state["ranks"]["2006"]["cpx_only"], "cpx_only", 0, positions_06, kind_state["data"]["2006"], highlight_06
+        vp06, kind_state["ranks"]["2006"]["cpx_only"], "cpx_only", 0, positions_06, kind_state["data"]["2006"], color_06
     )
     _highlight_selected(
-        vp06, kind_state["ranks"]["2006"]["cpx_liq"], "cpx_liq", split_idx, positions_06, kind_state["data"]["2006"], highlight_06
+        vp06, kind_state["ranks"]["2006"]["cpx_liq"], "cpx_liq", split_idx, positions_06, kind_state["data"]["2006"], color_06
     )
     _highlight_selected(
-        vp10, kind_state["ranks"]["2010"]["cpx_only"], "cpx_only", 0, positions_10, kind_state["data"]["2010"], highlight_10
+        vp10, kind_state["ranks"]["2010"]["cpx_only"], "cpx_only", 0, positions_10, kind_state["data"]["2010"], color_10
     )
     _highlight_selected(
-        vp10, kind_state["ranks"]["2010"]["cpx_liq"], "cpx_liq", split_idx, positions_10, kind_state["data"]["2010"], highlight_10
+        vp10, kind_state["ranks"]["2010"]["cpx_liq"], "cpx_liq", split_idx, positions_10, kind_state["data"]["2010"], color_10
     )
+
+    ax.set_xlim(0.5, n_cols + 0.5)
 
     if kind == "P":
         _apply_pressure_depth_axes(
@@ -2028,7 +2110,7 @@ def _plot_ranked_this_study_kind_panel(
             tick_labelsize=tick_labelsize,
         )
     else:
-        ax.set_ylabel("Temperature (掳C)", fontsize=y_axis_label_fontsize)
+        ax.set_ylabel("Temperature (°C)", fontsize=y_axis_label_fontsize)
         ax.tick_params(axis="y", labelsize=tick_labelsize)
     ax.xaxis.label.set_size(axis_label_fontsize)
 
@@ -2266,6 +2348,14 @@ def _eruption_slot_offset(eruption: str, delta: float = 0.16) -> float:
     return 0.0
 
 
+def _type_band_label(method: Mapping[str, Any]) -> str:
+    """Return the label used in the type band for one method."""
+    explicit_label = _clean_str(method.get("type_label"))
+    if explicit_label:
+        return explicit_label
+    return _display_phase_type_label(method.get("type"))
+
+
 def _add_category_and_type_bands(
     ax: plt.Axes,
     methods: Sequence[Mapping[str, Any]],
@@ -2276,6 +2366,7 @@ def _add_category_and_type_bands(
     category_y: float = 1.04,
     type_y: float = 0.985,
     show_type_labels: bool = True,
+    category_wrap_width: int = 14,
 ) -> None:
     x_positions = np.asarray(x_positions, dtype=float)
     if len(methods) == 0 or x_positions.size == 0:
@@ -2303,7 +2394,7 @@ def _add_category_and_type_bands(
         ax.text(
             xc,
             category_y,
-            _wrap_label(category, width=14, allow_word_break=True),
+            _wrap_label(category, width=category_wrap_width, allow_word_break=True),
             transform=ax.get_xaxis_transform(),
             ha="center",
             va="bottom",
@@ -2316,8 +2407,8 @@ def _add_category_and_type_bands(
     blocks = []
     start = 0
     for i in range(1, len(methods) + 1):
-        current_type_label = _display_phase_type_label(methods[start].get("type"))
-        next_type_label = None if i == len(methods) else _display_phase_type_label(methods[i].get("type"))
+        current_type_label = _type_band_label(methods[start])
+        next_type_label = None if i == len(methods) else _type_band_label(methods[i])
         if i == len(methods) or methods[i]["category"] != methods[start]["category"] or next_type_label != current_type_label:
             blocks.append((methods[start]["category"], current_type_label, start, i - 1))
             start = i
@@ -3246,7 +3337,7 @@ def _plot_ranked_literature_panel(
             tick_labelsize=tick_labelsize,
         )
     else:
-        ax.set_ylabel("Temperature (掳C)", fontsize=y_axis_label_fontsize)
+        ax.set_ylabel("Temperature (°C)", fontsize=y_axis_label_fontsize)
         if temperature_ylim is not None:
             ax.set_ylim(*temperature_ylim)
         ax.tick_params(axis="y", labelsize=tick_labelsize)
@@ -3437,7 +3528,7 @@ def _plot_original_vs_pre_2006_kind_panel(
         # reverse y-axis to have pressure increase downwards
         ax.invert_yaxis()
     else:
-        ax.set_ylabel("Temperature (掳C)", fontsize=y_axis_label_fontsize)
+        ax.set_ylabel("Temperature (°C)", fontsize=y_axis_label_fontsize)
         if temperature_ylim is not None:
             ax.set_ylim(*temperature_ylim)
 
@@ -3666,8 +3757,10 @@ def plot_ranked_thermobarometry_this_study(
     selection_threshold : float, default 50.0
         Threshold used by ``model_selection_mode="top1_or_top2"``. If the
         top-ranked model frequency is above this percentage, only that model
-        is highlighted. Otherwise the top two are highlighted.
-    model_selection_mode : {"cumulative", "top1_or_top2"}, default "cumulative"
+        is highlighted. Otherwise the top two are highlighted. Also used by
+        ``model_selection_mode="above_threshold"`` to select every model with
+        a frequency strictly greater than this percentage.
+    model_selection_mode : {"cumulative", "top1_or_top2", "above_threshold"}, default "cumulative"
         Strategy used to select favored models from the ranked frequency list.
     cumulative_selection_threshold : float, default 90.0
         Cumulative percentage target used by ``model_selection_mode="cumulative"``.
@@ -4197,6 +4290,8 @@ def _draw_rank_pie_with_mixed_labels(
     counterclock: bool = False,
     inside_fontsize: float = 13.5,
     outside_fontsize: float = 9.6,
+    inside_label_radius: float = 0.78,
+    outside_connector_lw: float = 1.15,
 ) -> None:
     wedges, _ = ax.pie(
         values,
@@ -4221,8 +4316,8 @@ def _draw_rank_pie_with_mixed_labels(
             text_color = "white" if luminance < 0.48 else "black"
             text_effects = [pe.Stroke(linewidth=1.4, foreground="black" if text_color == "white" else "white", alpha=0.58), pe.Normal()]
             ax.text(
-                0.68 * x_unit,
-                0.68 * y_unit,
+                inside_label_radius * x_unit,
+                inside_label_radius * y_unit,
                 label,
                 ha="center",
                 va="center",
@@ -4259,7 +4354,7 @@ def _draw_rank_pie_with_mixed_labels(
                 arrowprops={
                     "arrowstyle": "-",
                     "color": "0.35",
-                    "lw": 0.65,
+                    "lw": outside_connector_lw,
                     "shrinkA": 0,
                     "shrinkB": 0,
                     "connectionstyle": "arc3,rad=0.0",
@@ -4271,6 +4366,28 @@ def _draw_rank_pie_with_mixed_labels(
 def _rank_pie_split_save_path(save_path: str | Path, kind: str, phase_type: str) -> Path:
     save_path = Path(save_path)
     return save_path.with_name(f"{save_path.stem}_{kind}_{phase_type}{save_path.suffix}")
+
+
+def _save_figure_png_pdf_from_path(
+    fig: plt.Figure,
+    save_path: str | Path,
+    *,
+    dpi: int = 300,
+    bbox_inches: str = "tight",
+    **savefig_kwargs: Any,
+) -> tuple[Path, Path]:
+    """Save a figure as one PNG and one PDF using the same file stem."""
+    save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    if save_path.suffix.lower() == ".pdf":
+        pdf_path = save_path
+        png_path = save_path.with_suffix(".png")
+    else:
+        png_path = save_path.with_suffix(".png")
+        pdf_path = save_path.with_suffix(".pdf")
+    fig.savefig(pdf_path, bbox_inches=bbox_inches, **savefig_kwargs)
+    fig.savefig(png_path, dpi=dpi, bbox_inches=bbox_inches, **savefig_kwargs)
+    return pdf_path, png_path
 
 
 def _draw_rank_pie_year_pair(
@@ -4364,6 +4481,17 @@ def plot_ranked_thermobarometry_rank_pies(
     figsize: tuple[float, float] = (15.0, 8.0),
     dpi: int = 200,
     save_path: Optional[str | Path] = None,
+    inside_label_fontsize: float = 24.0,
+    outside_label_fontsize: float = 18.0,
+    inside_label_radius: float = 0.6,
+    outside_connector_lw: float = 1.5,
+    year_title_fontsize: float = 30.0,
+    year_title_pad: float = 0.0,
+    group_title_fontsize: float = 18.0,
+    group_title_y: float = 1.14,
+    pair_wspace: float = -0.28,
+    group_wspace: float = 0.06,
+    group_hspace: float = 0.10,
 ) -> tuple[plt.Figure, np.ndarray]:
     """Plot model-selection percentage pies for P/T, phase type, and eruption year."""
     state = _build_ranked_thermobarometry_state(
@@ -4374,16 +4502,20 @@ def plot_ranked_thermobarometry_rank_pies(
         pressure_model_pool=pressure_model_pool,
         temperature_model_pool=temperature_model_pool,
     )
-    fig, axes_obj = plt.subplots(2, 4, figsize=figsize, dpi=dpi, constrained_layout=True)
-    axes = np.asarray(axes_obj)
+    fig = plt.figure(figsize=figsize, dpi=dpi, constrained_layout=True)
+    fig.set_constrained_layout_pads(w_pad=0.01, h_pad=0.02, wspace=0.02, hspace=0.04)
+    outer = fig.add_gridspec(2, 2, wspace=group_wspace, hspace=group_hspace)
+    axes = np.empty((2, 4), dtype=object)
     phase_order = ("cpx_only", "cpx_liq")
     year_order = ("2006", "2010")
     colors = list(plt.cm.tab20.colors)
 
     for row_idx, kind in enumerate(("P", "T")):
         for phase_idx, phase_type in enumerate(phase_order):
+            inner = outer[row_idx, phase_idx].subgridspec(1, 2, wspace=pair_wspace)
             for year_idx, year in enumerate(year_order):
-                ax = axes[row_idx, phase_idx * 2 + year_idx]
+                ax = fig.add_subplot(inner[0, year_idx])
+                axes[row_idx, phase_idx * 2 + year_idx] = ax
                 rank_pcts = state[kind]["ranks"][year][phase_type]
                 values, labels = _format_rank_pie_labels(
                     rank_pcts,
@@ -4398,12 +4530,29 @@ def plot_ranked_thermobarometry_rank_pies(
                         colors=colors,
                         startangle=90,
                         counterclock=False,
+                        inside_fontsize=inside_label_fontsize,
+                        outside_fontsize=outside_label_fontsize,
+                        inside_label_radius=inside_label_radius,
+                        outside_connector_lw=outside_connector_lw,
                     )
-                ax.set_title(f"{kind} {_display_phase_type_label(phase_type)} {year}", fontsize=10.5)
+                ax.set_title(year, fontsize=year_title_fontsize, pad=year_title_pad)
                 ax.set_aspect("equal")
 
+            left_ax = axes[row_idx, phase_idx * 2]
+            left_ax.text(
+                1.0,
+                group_title_y,
+                f"{kind} {_display_phase_type_label(phase_type)}",
+                transform=left_ax.transAxes,
+                ha="center",
+                va="bottom",
+                fontsize=group_title_fontsize,
+                fontweight="bold",
+                clip_on=False,
+            )
+
     if save_path is not None:
-        fig.savefig(Path(save_path), dpi=dpi, bbox_inches="tight")
+        _save_figure_png_pdf_from_path(fig, save_path, dpi=dpi, bbox_inches="tight")
     return fig, axes
 
 def export_ranked_thermobarometry_model_summary(
@@ -4453,6 +4602,72 @@ def export_ranked_thermobarometry_model_summary(
             )
         )
 
+    def _raw_model_values(df_pred: pd.DataFrame, model_name: str, label: str) -> np.ndarray:
+        if model_name not in df_pred.columns:
+            raise KeyError(f"{label} is missing column {model_name!r}.")
+        raw_values = pd.to_numeric(df_pred[model_name], errors="coerce").replace(
+            [np.inf, -np.inf],
+            np.nan,
+        )
+        return raw_values.dropna().to_numpy(dtype=float)
+
+    def _selected_model_names(rank_pcts: Sequence[tuple[str, float]]) -> set[str]:
+        selected_rank_ids = _selected_rank_set_from_topk(
+            rank_pcts,
+            threshold=selection_threshold,
+            model_selection_mode=model_selection_mode,
+            cumulative_threshold=cumulative_selection_threshold,
+        )
+        return {
+            model_name
+            for rank_i, (model_name, _) in enumerate(rank_pcts)
+            if rank_i in selected_rank_ids
+        }
+
+    def _summary_row(
+        kind: str,
+        eruption: str,
+        phase_type: str,
+        model_name: str,
+        raw_array: np.ndarray,
+        rank_pct_map: Mapping[str, float],
+        selected_models: set[str],
+        *,
+        proportion_samples_favored_model: Optional[float] = None,
+        selected_by_AIMS4PT: Optional[bool] = None,
+    ) -> dict[str, Any]:
+        tukey_array = _remove_boxplot_outliers(raw_array)
+        row = {
+            "quantity": kind,
+            "eruption": eruption,
+            "phase_type": phase_type,
+            "model": model_name,
+            "min": _summary_value(tukey_array, "min"),
+            "max": _summary_value(tukey_array, "max"),
+            "median": _summary_value(tukey_array, "median"),
+            "n_samples_raw": int(raw_array.size),
+            "n_samples_after_tukey": int(tukey_array.size),
+            "proportion_samples_favored_model": (
+                rank_pct_map.get(model_name, 0.0) / 100.0
+                if proportion_samples_favored_model is None
+                else float(proportion_samples_favored_model)
+            ),
+            "selected_by_AIMS4PT": (
+                model_name in selected_models
+                if selected_by_AIMS4PT is None
+                else bool(selected_by_AIMS4PT)
+            ),
+        }
+        if kind == "P":
+            row.update(
+                {
+                    "min_depth_km": _depth_value(row["min"]),
+                    "max_depth_km": _depth_value(row["max"]),
+                    "median_depth_km": _depth_value(row["median"]),
+                }
+            )
+        return row
+
     def _build_kind_summary(kind: str) -> pd.DataFrame:
         kind_state = state[kind]
         rows: list[dict[str, Any]] = []
@@ -4462,50 +4677,39 @@ def export_ranked_thermobarometry_model_summary(
                 df_pred = kind_state["results"][eruption][phase_type]
                 rank_pcts = kind_state["ranks"][eruption][phase_type]
                 rank_pct_map = {model_name: float(pct) for model_name, pct in rank_pcts}
-                selected_rank_ids = _selected_rank_set_from_topk(
-                    rank_pcts,
-                    threshold=selection_threshold,
-                    model_selection_mode=model_selection_mode,
-                    cumulative_threshold=cumulative_selection_threshold,
-                )
-                selected_models = {
-                    model_name
-                    for rank_i, (model_name, _) in enumerate(rank_pcts)
-                    if rank_i in selected_rank_ids
-                }
+                selected_models = _selected_model_names(rank_pcts)
 
                 for model_name in kind_state["columns"][phase_type]:
-                    if model_name not in df_pred.columns:
-                        raise KeyError(f"{kind} results {eruption} {phase_type} are missing column {model_name!r}.")
-
-                    raw_values = pd.to_numeric(df_pred[model_name], errors="coerce").replace(
-                        [np.inf, -np.inf],
-                        np.nan,
-                    )
-                    raw_array = raw_values.dropna().to_numpy(dtype=float)
-                    tukey_array = _remove_boxplot_outliers(raw_array)
-                    row = {
-                        "quantity": kind,
-                        "eruption": eruption,
-                        "phase_type": phase_type,
-                        "model": model_name,
-                        "min": _summary_value(tukey_array, "min"),
-                        "max": _summary_value(tukey_array, "max"),
-                        "median": _summary_value(tukey_array, "median"),
-                        "n_samples_raw": int(raw_array.size),
-                        "n_samples_after_tukey": int(tukey_array.size),
-                        "proportion_samples_favored_model": rank_pct_map.get(model_name, 0.0) / 100.0,
-                        "selected_by_AIMS4PT": model_name in selected_models,
-                    }
-                    if kind == "P":
-                        row.update(
-                            {
-                                "min_depth_km": _depth_value(row["min"]),
-                                "max_depth_km": _depth_value(row["max"]),
-                                "median_depth_km": _depth_value(row["median"]),
-                            }
+                    raw_array = _raw_model_values(df_pred, model_name, f"{kind} results {eruption} {phase_type}")
+                    rows.append(
+                        _summary_row(
+                            kind,
+                            eruption,
+                            phase_type,
+                            model_name,
+                            raw_array,
+                            rank_pct_map,
+                            selected_models,
                         )
-                    rows.append(row)
+                    )
+
+                overall_array = _selected_predictions_from_best_models(
+                    df_pred,
+                    kind_state["best_models"][eruption][phase_type],
+                )
+                rows.append(
+                    _summary_row(
+                        kind,
+                        eruption,
+                        phase_type,
+                        "overall",
+                        overall_array,
+                        {},
+                        set(),
+                        proportion_samples_favored_model=1.0,
+                        selected_by_AIMS4PT=True,
+                    )
+                )
 
         return pd.DataFrame(rows)
 
@@ -4584,6 +4788,17 @@ def plot_ranked_thermobarometry_summary(
     show_rank_percent_annotations: bool = False,
     show_selected_model_summary: bool = True,
     rank_pie_save_path: Optional[str | Path] = None,
+    rank_pie_figsize: tuple[float, float] = (23.0, 12.0),
+    rank_pie_dpi: int = 200,
+    rank_pie_inside_label_fontsize: float = 24.0,
+    rank_pie_outside_label_fontsize: float = 18.0,
+    rank_pie_inside_label_radius: float = 0.6,
+    rank_pie_outside_connector_lw: float = 1.5,
+    rank_pie_pair_wspace: float = -0.28,
+    rank_pie_year_title_fontsize: float = 30.0,
+    rank_pie_year_title_pad: float = 0.0,
+    rank_pie_group_title_fontsize: float = 18.0,
+    rank_pie_group_title_y: float = 1.14,
 ) -> dict[str, tuple[plt.Figure, np.ndarray]]:
     """
     Convenience wrapper that reproduces both notebook summary figures.
@@ -4591,18 +4806,23 @@ def plot_ranked_thermobarometry_summary(
     Parameters
     ----------
     selection_threshold : float, default 50.0
-        Threshold used by ``model_selection_mode="top1_or_top2"``.
-    model_selection_mode : {"cumulative", "top1_or_top2"}, default "cumulative"
+        Threshold used by ``model_selection_mode="top1_or_top2"`` and by
+        ``model_selection_mode="above_threshold"``.
+    model_selection_mode : {"cumulative", "top1_or_top2", "above_threshold"}, default "cumulative"
         Strategy used by both summary figures to select favored models.
-    cumulative_selection_threshold : float, default 90.0
+    cumulative_selection_threshold : float, default 80.0
         Cumulative percentage target used by ``model_selection_mode="cumulative"``.
+    rank_pie_save_path : path-like, optional
+        If provided, save the combined rank-pie figure as both PNG and PDF
+        using this path's file stem.
     show : bool, default True
         Whether to display the generated figures before returning them.
 
     Returns
     -------
     dict
-        Always includes ``"this_study"``. Includes
+        Always includes ``"this_study"``. Includes ``"rank_pies"`` when
+        ``rank_pie_save_path`` is provided. Includes
         ``"literature_comparison"`` only when both literature tables are
         provided.
     """
@@ -4643,7 +4863,7 @@ def plot_ranked_thermobarometry_summary(
     }
 
     if rank_pie_save_path is not None:
-        figures.update(plot_ranked_thermobarometry_rank_pies_split(
+        rank_pie_fig_axes = plot_ranked_thermobarometry_rank_pies(
             cpx_only_workflows,
             cpx_liq_workflows,
             pressure_columns,
@@ -4651,9 +4871,27 @@ def plot_ranked_thermobarometry_summary(
             pressure_model_pool=pressure_model_pool,
             temperature_model_pool=temperature_model_pool,
             use_model_abbreviations=use_model_abbreviations,
-            save_path=rank_pie_save_path,
-            dpi=200,
-        ))
+            figsize=rank_pie_figsize,
+            dpi=rank_pie_dpi,
+            save_path=None,
+            inside_label_fontsize=rank_pie_inside_label_fontsize,
+            outside_label_fontsize=rank_pie_outside_label_fontsize,
+            inside_label_radius=rank_pie_inside_label_radius,
+            outside_connector_lw=rank_pie_outside_connector_lw,
+            year_title_fontsize=rank_pie_year_title_fontsize,
+            year_title_pad=rank_pie_year_title_pad,
+            group_title_fontsize=rank_pie_group_title_fontsize,
+            group_title_y=rank_pie_group_title_y,
+            pair_wspace=rank_pie_pair_wspace,
+        )
+        figures["rank_pies"] = rank_pie_fig_axes
+        _save_figure_png_pdf_from_path(
+            rank_pie_fig_axes[0],
+            rank_pie_save_path,
+            dpi=rank_pie_dpi,
+            bbox_inches="tight",
+            pad_inches=0.03,
+        )
     if pressure_literature is not None and (temperature_literature is not None or not literature_include_temperature):
         figures["literature_comparison"] = plot_ranked_thermobarometry_literature_comparison(
             cpx_only_workflows,

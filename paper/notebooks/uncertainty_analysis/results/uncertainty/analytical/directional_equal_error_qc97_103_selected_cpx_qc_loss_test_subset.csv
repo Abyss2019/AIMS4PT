@@ -1,0 +1,9 @@
+model_type,phase,storage_oxide,oxide,total_samples_old_qc98_102,retained_old_qc98_102,lost_any_old_qc98_102,lost_plus_old_qc98_102,lost_minus_old_qc98_102,lost_pct_old_qc98_102,total_samples_new_qc97_103,retained_new_qc97_103,lost_any_new_qc97_103,lost_plus_new_qc97_103,lost_minus_new_qc97_103,lost_pct_new_qc97_103,delta_lost_any,delta_retained
+cpx_liq,cpx,CaO_cpx,CaO_cpx,59,59,0,0,0,0.0,59,59,0,0,0,0.0,0,0
+cpx_liq,cpx,FeO_cpx,FeOt_cpx,59,59,0,0,0,0.0,59,59,0,0,0,0.0,0,0
+cpx_liq,cpx,MgO_cpx,MgO_cpx,59,59,0,0,0,0.0,59,59,0,0,0,0.0,0,0
+cpx_liq,cpx,SiO2_cpx,SiO2_cpx,59,56,3,1,2,5.084745762711865,59,56,3,1,2,5.084745762711865,0,0
+cpx_only,cpx,CaO_cpx,CaO_cpx,59,59,0,0,0,0.0,59,59,0,0,0,0.0,0,0
+cpx_only,cpx,FeO_cpx,FeOt_cpx,59,59,0,0,0,0.0,59,59,0,0,0,0.0,0,0
+cpx_only,cpx,MgO_cpx,MgO_cpx,59,59,0,0,0,0.0,59,59,0,0,0,0.0,0,0
+cpx_only,cpx,SiO2_cpx,SiO2_cpx,59,56,3,1,2,5.084745762711865,59,56,3,1,2,5.084745762711865,0,0

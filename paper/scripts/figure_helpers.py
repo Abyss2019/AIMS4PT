@@ -1417,9 +1417,12 @@ def get_n_liq__nb00_c24(model):
 
 def _resolve_model_style_key__nb00_c24(model_name):
     """Resolve full model names or abbreviations to the configured fig. 1 style key."""
-    candidates = [str(model_name)]
+    model_name_text = str(model_name)
+    candidates = [model_name_text]
+    if "-" in model_name_text:
+        candidates.append(model_name_text.split("-", 1)[0])
     for target in ("P", "T"):
-        candidates.append(get_model_abbreviation(str(model_name), target))
+        candidates.append(get_model_abbreviation(model_name_text, target))
 
     for candidate in candidates:
         style_key = MODEL_STYLE_LOOKUP__nb00_c24.get(str(candidate).casefold())
@@ -1435,6 +1438,16 @@ def _get_model_style__nb00_c24(model_name):
 
 def order_model_names_for_fig1__nb00_c24(model_names):
     """Order fig. 1 models by the configured plot order."""
+    unique_names = []
+    seen_keys = set()
+    for name in model_names:
+        style_key = _resolve_model_style_key__nb00_c24(name)
+        dedupe_key = (style_key or str(name)).casefold()
+        if dedupe_key in seen_keys:
+            continue
+        unique_names.append(name)
+        seen_keys.add(dedupe_key)
+
     def sort_key(indexed_name):
         index, name = indexed_name
         style = _get_model_style__nb00_c24(name)
@@ -1442,15 +1455,20 @@ def order_model_names_for_fig1__nb00_c24(model_names):
             return (1, index)
         return (0, style["plot_order"], index)
 
-    return [name for _, name in sorted(enumerate(model_names), key=sort_key)]
+    return [name for _, name in sorted(enumerate(unique_names), key=sort_key)]
 
 def build_global_color_map__nb00_c24(model_names, color_cycle):
-    if len(model_names) > len(color_cycle):
-        raise ValueError("The configured colorblind-friendly palette is too short for the model list.")
     color_map = {}
-    for i, name in enumerate(model_names):
+    fallback_index = 0
+    for name in model_names:
         style = _get_model_style__nb00_c24(name)
-        color_map[name] = style["color"] if style is not None else color_cycle[i]
+        if style is not None:
+            color_map[name] = style["color"]
+            continue
+        if not color_cycle:
+            raise ValueError("The configured colorblind-friendly palette is empty.")
+        color_map[name] = color_cycle[fallback_index % len(color_cycle)]
+        fallback_index += 1
     return color_map
 
 def make_group_style__nb00_c24(names, global_color_map, name2n=None):
@@ -1757,6 +1775,7 @@ def add_legend_fixed_ul__nb00_c24(ax, names, name2style, name2n):
     handles, labels = [], []
     for n in names:
         st = name2style[n]
+        label_name = _resolve_model_style_key__nb00_c24(n) or n
         handles.append(
             Line2D([0], [0],
                    marker=st["marker"], linestyle='None',
@@ -1765,7 +1784,7 @@ def add_legend_fixed_ul__nb00_c24(ax, names, name2style, name2n):
                     markeredgewidth=1.1 if not st.get("filled", True) else 0,
                     markersize=LEGEND_MARKER_SIZE__nb00_c24)
         )
-        labels.append(f"{n} (N={name2n[n]})")
+        labels.append(f"{label_name} (N={name2n[n]})")
 
     legend = ax.legend(
         handles, labels,

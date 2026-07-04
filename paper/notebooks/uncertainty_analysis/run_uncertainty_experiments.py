@@ -47,7 +47,6 @@ import matplotlib.ticker as mticker
 import seaborn as sns
 from PIL import Image, ImageColor, ImageDraw, ImageFont
 
-from aims4pt.model_tools.model_registry import get_models_initial_pools, import_all_models
 from constants_illustration import get_model_abbreviation
 
 
@@ -88,6 +87,28 @@ CPX_LEVELS = [(0.005, "cpx_0.5pct"), (0.010, "cpx_1pct")]
 LIQ_LEVELS = [(0.010, "liq_1pct"), (0.020, "liq_2pct"), (0.030, "liq_3pct")]
 KD_FINE_BIN_EDGES = np.array([0.20, 0.22, 0.24, 0.26, 0.28, 0.30, 0.32, 0.34, 0.36], dtype=float)
 KD_COARSE_BIN_EDGES = np.array([0.20, 0.24, 0.28, 0.32, 0.36], dtype=float)
+CPX_TOTAL_MIN = 97.0
+CPX_TOTAL_MAX = 103.0
+CPX_STOICH_MIN = 0.9
+CPX_STOICH_MAX = 1.1
+DIRECTIONAL_SENSITIVITY_METHOD = "central_plus_minus"
+FRAMEWORK_SENSITIVITY_VERSION = "robust_workflow_v2"
+DIRECTIONAL_RELATIVE_ERRORS = {
+    "SiO2": 0.03,
+    "TiO2": 0.08,
+    "Al2O3": 0.03,
+    "FeO": 0.03,
+    "MgO": 0.03,
+    "MnO": 0.08,
+    "CaO": 0.03,
+    "Na2O": 0.08,
+    "Cr2O3": 0.08,
+    "K2O": 0.08,
+}
+DIRECTIONAL_H2O_ABS_SIGMA = 3.0
+DIRECTIONAL_CPX_BASE_ORDER = ["SiO2", "TiO2", "Al2O3", "FeO", "MgO", "MnO", "CaO", "Na2O", "Cr2O3", "K2O"]
+DIRECTIONAL_LIQ_BASE_ORDER = ["SiO2", "TiO2", "Al2O3", "FeO", "MgO", "MnO", "CaO", "Na2O", "K2O", "H2O"]
+DIRECTIONAL_DISPLAY_BASE = {"FeO": "FeOt"}
 
 
 @dataclass(frozen=True)
@@ -96,6 +117,17 @@ class ModelSpec:
     model: object
     name: str
     model_type: str = "cpx_liq"
+
+
+@dataclass(frozen=True)
+class DirectionalPerturbationSpec:
+    phase: str
+    storage_oxide: str
+    display_oxide: str
+    rel_error: float
+    rel_error_label: str
+    error_type: str
+    abs_sigma: float | None = None
 
 
 def normalize_split(value: object) -> str:
@@ -124,6 +156,8 @@ def ensure_dirs(output_dir: Path) -> dict[str, Path]:
         "kd_fig": output_dir / "kd" / "figures_test_subset",
         "analytical": output_dir / "analytical",
         "analytical_fig": output_dir / "analytical" / "figures_test_subset",
+        "framework": output_dir / "framework",
+        "framework_fig": output_dir / "framework" / "figures_test_subset",
     }
     for path in paths.values():
         path.mkdir(parents=True, exist_ok=True)
@@ -168,6 +202,8 @@ def load_test_subset(input_path: Path, sheet: str) -> tuple[pd.DataFrame, dict[s
 
 def make_model_specs(method_type: str = "cpx_liq") -> list[ModelSpec]:
     """Detect thermobarometer models from the registry."""
+    from aims4pt.model_tools.model_registry import get_models_initial_pools, import_all_models
+
     imported, failed = import_all_models()
     if failed:
         print(f"WARNING: model import failures: {failed}")
@@ -233,13 +269,30 @@ def safe_predict(spec: ModelSpec, cpx: pd.DataFrame, liq: pd.DataFrame) -> tuple
 
 def predict_with_optional_cache(spec: ModelSpec, cpx: pd.DataFrame, liq: pd.DataFrame):
     """Use local cached helpers for wrappers whose public predict is slow."""
-    if "Chicchi" in spec.name and getattr(spec.model, "cpx_only", None) is False:
+    full_name = str(getattr(spec.model, "model_name", ""))
+    if ("Chicchi" in spec.name or "Chicchi" in full_name) and getattr(spec.model, "cpx_only", None) is False:
         from aims4pt.model_tools.data.Chicchi23.script.functions_cpx_liq import easy_predict_cpx_liq
 
         input_data = spec.model.format_input(X_cpx=cpx, X_liq=liq)
         pred = easy_predict_cpx_liq(input_data, T_P=spec.target_type, dir=spec.model.models_dir)
         return pd.Series(pred, index=cpx.index, name="P_kbar" if spec.target_type == "P" else "T_C")
     return spec.model.predict(cpx, liq)
+
+
+def framework_safe_predict(spec: ModelSpec, cpx: pd.DataFrame, liq: pd.DataFrame) -> tuple[pd.Series, dict[object, str]]:
+    """Predict for framework screening without slow per-row retries."""
+    if len(cpx) == 0:
+        return pd.Series(dtype=float), {}
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            pred = predict_with_optional_cache(spec, cpx.copy(), liq.copy())
+        pred = pd.Series(pred, index=cpx.index, dtype="float64")
+        return pred, {idx: "" for idx in cpx.index}
+    except Exception as exc:
+        message = f"{type(exc).__name__}: {exc}"
+        pred = pd.Series(np.nan, index=cpx.index, dtype="float64")
+        return pred, {idx: message for idx in cpx.index}
 
 
 def compatible_baseline(path: Path, test_ids: set[object], expected_models: set[str], expected_rows: int) -> pd.DataFrame | None:
@@ -1009,6 +1062,117 @@ def model_uses_oxide(spec: ModelSpec, phase: str, oxide: str) -> bool:
     return False
 
 
+def oxide_base_name(oxide: str, phase: str) -> str:
+    """Return the base oxide name from a phase-specific column."""
+    suffix = f"_{phase}"
+    oxide_text = str(oxide)
+    if oxide_text.endswith(suffix):
+        return oxide_text[: -len(suffix)]
+    return oxide_text
+
+
+def display_oxide_name(storage_oxide: str, phase: str) -> str:
+    """Return the reader-facing oxide label while keeping storage-column aliases internal."""
+    base = oxide_base_name(storage_oxide, phase)
+    display_base = DIRECTIONAL_DISPLAY_BASE.get(base, base)
+    return f"{display_base}_{phase}"
+
+
+def directional_rel_error_label(rel_error: float) -> str:
+    """Format a relative analytical error as a compact label."""
+    return f"{int(round(float(rel_error) * 100))}pct"
+
+
+def directional_display_oxide_order(phase: str, available: set[str]) -> list[str]:
+    """Return the directional-sensitivity display order for one phase."""
+    base_order = DIRECTIONAL_CPX_BASE_ORDER if phase == "cpx" else DIRECTIONAL_LIQ_BASE_ORDER
+    ordered = [display_oxide_name(f"{base}_{phase}", phase) for base in base_order]
+    return [oxide for oxide in ordered if oxide in available]
+
+
+def directional_single_oxide_specs(test_df: pd.DataFrame, model_type: str) -> list[DirectionalPerturbationSpec]:
+    """Return one-at-a-time oxide perturbations for the central-difference sensitivity test."""
+    specs: list[DirectionalPerturbationSpec] = []
+    phases = ["cpx", "liq"] if model_type == "cpx_liq" else ["cpx"]
+    if "cpx" in phases:
+        for base in DIRECTIONAL_CPX_BASE_ORDER:
+            storage_oxide = f"{base}_cpx"
+            if storage_oxide not in test_df.columns:
+                continue
+            rel_error = DIRECTIONAL_RELATIVE_ERRORS[base]
+            specs.append(
+                DirectionalPerturbationSpec(
+                    phase="cpx",
+                    storage_oxide=storage_oxide,
+                    display_oxide=display_oxide_name(storage_oxide, "cpx"),
+                    rel_error=rel_error,
+                    rel_error_label=directional_rel_error_label(rel_error),
+                    error_type="relative",
+                )
+            )
+    if "liq" in phases:
+        for base in DIRECTIONAL_LIQ_BASE_ORDER:
+            storage_oxide = f"{base}_liq"
+            if storage_oxide not in test_df.columns:
+                continue
+            if base == "H2O":
+                specs.append(
+                    DirectionalPerturbationSpec(
+                        phase="liq",
+                        storage_oxide=storage_oxide,
+                        display_oxide=storage_oxide,
+                        rel_error=np.nan,
+                        rel_error_label="3wtpct_abs",
+                        error_type="absolute_wt_pct",
+                        abs_sigma=DIRECTIONAL_H2O_ABS_SIGMA,
+                    )
+                )
+                continue
+            rel_error = DIRECTIONAL_RELATIVE_ERRORS[base]
+            specs.append(
+                DirectionalPerturbationSpec(
+                    phase="liq",
+                    storage_oxide=storage_oxide,
+                    display_oxide=display_oxide_name(storage_oxide, "liq"),
+                    rel_error=rel_error,
+                    rel_error_label=directional_rel_error_label(rel_error),
+                    error_type="relative",
+                )
+            )
+    return specs
+
+
+def directional_qc_status(perturbed: pd.DataFrame, phase: str) -> pd.DataFrame:
+    """Evaluate the existing phase-specific QC checks after one perturbation."""
+    cpx_total = oxide_total(perturbed, "cpx")
+    liq_total = oxide_total(perturbed, "liq")
+    stoich = cpx_stoich_ratio(perturbed)
+    status = pd.Series("ok", index=perturbed.index, dtype=object)
+    qc_message = pd.Series("", index=perturbed.index, dtype=object)
+    if phase == "cpx":
+        cpx_fail = (
+            (~cpx_total.between(CPX_TOTAL_MIN, CPX_TOTAL_MAX))
+            | (~stoich.between(CPX_STOICH_MIN, CPX_STOICH_MAX))
+            | stoich.isna()
+        )
+        status.loc[cpx_fail] = "qc_failed_cpx"
+        qc_message.loc[cpx_fail] = "cpx total or stoichiometry outside accepted range"
+    else:
+        liq_fail = liq_total > 105
+        status.loc[liq_fail] = "qc_failed_liq_total_high"
+        qc_message.loc[liq_fail] = "liquid total exceeds 105 wt.%"
+    return pd.DataFrame(
+        {
+            "status": status,
+            "qc_message": qc_message,
+            "cpx_total": cpx_total,
+            "cpx_stoich_ratio": stoich,
+            "liq_total": liq_total,
+        },
+        index=perturbed.index,
+    )
+
+
 def baseline_lookup(baseline: pd.DataFrame) -> dict[tuple[object, str, str], float]:
     """Create a lookup from sample/model/target to baseline prediction."""
     lookup: dict[tuple[object, str, str], float] = {}
@@ -1101,7 +1265,11 @@ def compute_analytical_long(
         base_status = pd.Series("ok", index=perturbed.index, dtype=object)
         qc_message = pd.Series("", index=perturbed.index, dtype=object)
         if phase == "cpx":
-            cpx_fail = (~cpx_total.between(98, 102)) | (~stoich.between(0.9, 1.1)) | stoich.isna()
+            cpx_fail = (
+                (~cpx_total.between(CPX_TOTAL_MIN, CPX_TOTAL_MAX))
+                | (~stoich.between(CPX_STOICH_MIN, CPX_STOICH_MAX))
+                | stoich.isna()
+            )
             base_status.loc[cpx_fail] = "qc_failed_cpx"
             qc_message.loc[cpx_fail] = "cpx total or stoichiometry outside accepted range"
         else:
@@ -1385,33 +1553,41 @@ def run_directional_equal_error_analysis(
     paths: dict[str, Path],
     reuse_existing: bool,
 ) -> tuple[pd.DataFrame, int]:
-    """Run equal-error directional OAT for cpx-liq and cpx-only model groups."""
+    """Run oxide-specific central-difference directional OAT for cpx-liq and cpx-only models."""
     long_path = paths["analytical"] / "directional_equal_error_oat_long_test_subset.csv"
     specs = make_model_specs("cpx_liq") + make_model_specs("cpx_only")
     expected_rows = 0
-    for spec in specs:
-        phases = ["cpx", "liq"] if spec.model_type == "cpx_liq" else ["cpx"]
-        oxide_count = 0
-        if "cpx" in phases:
-            oxide_count += len([col for col in CPX_OXIDES if col in test_df.columns])
-        if "liq" in phases:
-            oxide_count += len([col for col in LIQ_OXIDES if col in test_df.columns])
-        expected_rows += len(test_df) * oxide_count * 2
+    for model_type in ["cpx_liq", "cpx_only"]:
+        model_specs = [spec for spec in specs if spec.model_type == model_type]
+        expected_rows += len(test_df) * len(model_specs) * len(directional_single_oxide_specs(test_df, model_type))
 
     if reuse_existing and long_path.exists():
         candidate = pd.read_csv(long_path, low_memory=False)
         expected_models = {spec.name for spec in specs}
         actual_models = set(candidate["model"].dropna().astype(str))
+        required_cols = {
+            "plus_value",
+            "minus_value",
+            "sigma_value",
+            "plus_prediction",
+            "minus_prediction",
+            "plus_status",
+            "minus_status",
+            "error_type",
+            "sensitivity_method",
+        }
         if (
             len(candidate) == expected_rows
             and set(candidate["model_type"].dropna()) == {"cpx_liq", "cpx_only"}
             and actual_models == expected_models
+            and required_cols.issubset(candidate.columns)
+            and candidate["sensitivity_method"].eq(DIRECTIONAL_SENSITIVITY_METHOD).all()
         ):
             long_df = candidate
-            print(f"Reused directional equal-error OAT results: {long_path}")
+            print(f"Reused directional central-difference OAT results: {long_path}")
         else:
             print(
-                "Existing directional equal-error OAT results are not compatible; "
+                "Existing directional OAT results are not compatible with central-difference schema; "
                 f"recomputing. rows={len(candidate)}, expected_rows={expected_rows}, "
                 f"models={sorted(actual_models)}"
             )
@@ -1431,86 +1607,63 @@ def compute_directional_equal_error_long(
     specs: list[ModelSpec],
     out_path: Path,
 ) -> pd.DataFrame:
-    """Compute positive-perturbation directional effects at matched cpx/liquid errors."""
+    """Compute central-difference directional effects for oxide-specific analytical errors."""
     if out_path.exists():
         out_path.unlink()
+    return compute_directional_central_difference(test_df, specs, out_path=out_path)
+
+
+def _combine_side_messages(
+    plus_status: pd.Series,
+    plus_message: pd.Series,
+    minus_status: pd.Series,
+    minus_message: pd.Series,
+) -> pd.Series:
+    """Combine plus/minus QC messages into one review column."""
+    combined = pd.Series("", index=plus_status.index, dtype=object)
+    plus_bad = plus_status.ne("ok")
+    minus_bad = minus_status.ne("ok")
+    combined.loc[plus_bad & ~minus_bad] = "plus: " + plus_message.loc[plus_bad & ~minus_bad].astype(str)
+    combined.loc[minus_bad & ~plus_bad] = "minus: " + minus_message.loc[minus_bad & ~plus_bad].astype(str)
+    both_bad = plus_bad & minus_bad
+    combined.loc[both_bad] = (
+        "plus: " + plus_message.loc[both_bad].astype(str) + "; minus: " + minus_message.loc[both_bad].astype(str)
+    )
+    return combined
+
+
+def _apply_prediction_side(
+    rows: pd.DataFrame,
+    *,
+    side: str,
+    pred: pd.Series,
+    errors: dict[object, str],
+    ok_mask: pd.Series,
+) -> None:
+    """Write one perturbation-side prediction and update side status for failed rows."""
+    prediction_col = f"{side}_prediction"
+    status_col = f"{side}_status"
+    for idx in rows.index[ok_mask]:
+        err = errors.get(idx, "")
+        value = pred.loc[idx] if idx in pred.index else np.nan
+        if err or pd.isna(value):
+            rows.loc[idx, status_col] = "calculation_failed"
+            message = err or f"{side} prediction returned NaN"
+            existing = str(rows.loc[idx, "error_message"]) if rows.loc[idx, "error_message"] else ""
+            rows.loc[idx, "error_message"] = f"{existing}; {side}: {message}".strip("; ")
+            continue
+        rows.loc[idx, prediction_col] = value
+
+
+def compute_directional_central_difference(
+    test_df: pd.DataFrame,
+    specs: list[ModelSpec],
+    out_path: Path | None = None,
+) -> pd.DataFrame:
+    """Compute +/-sigma central-difference rows for all requested model-target entries."""
 
     first_write = True
     records: list[pd.DataFrame] = []
-    existing_keys: set[tuple[str, str, str, str, str, float]] = set()
-
-    source_path = out_path.parent / "analytical_oat_long_test_subset.csv"
-    if source_path.exists():
-        source_rows = pd.read_csv(source_path, low_memory=False)
-        source_rows = normalize_output_model_names(source_rows)
-        expected_models = {spec.name for spec in specs}
-        source_rows = source_rows[
-            source_rows["sign"].eq("plus")
-            & source_rows["model"].isin(expected_models)
-            & (
-                (source_rows["phase"].eq("cpx") & source_rows["rel_error"].eq(0.010))
-                | (source_rows["phase"].eq("liq") & source_rows["rel_error"].isin([0.010, 0.020]))
-            )
-        ].copy()
-        if not source_rows.empty:
-            source_rows["model_type"] = "cpx_liq"
-            source_rows["baseline_prediction"] = np.where(
-                source_rows["target_type"].eq("P"),
-                source_rows["P_baseline"],
-                source_rows["T_baseline"],
-            )
-            source_rows["perturbed_prediction"] = np.where(
-                source_rows["target_type"].eq("P"),
-                source_rows["P_perturbed"],
-                source_rows["T_perturbed"],
-            )
-            source_rows["signed_effect"] = np.where(
-                source_rows["target_type"].eq("P"),
-                source_rows["deltaP_from_baseline"],
-                source_rows["deltaT_from_baseline"],
-            )
-            source_rows["abs_effect"] = np.where(
-                source_rows["target_type"].eq("P"),
-                source_rows["abs_deltaP_from_baseline"],
-                source_rows["abs_deltaT_from_baseline"],
-            )
-            source_rows = source_rows[
-                [
-                    "id",
-                    "split",
-                    "model_type",
-                    "model",
-                    "target_type",
-                    "phase",
-                    "oxide",
-                    "rel_error",
-                    "rel_error_label",
-                    "sign",
-                    "baseline_value",
-                    "perturbed_value",
-                    "baseline_prediction",
-                    "perturbed_prediction",
-                    "signed_effect",
-                    "abs_effect",
-                    "cpx_total",
-                    "cpx_stoich_ratio",
-                    "liq_total",
-                    "not_used_by_model",
-                    "status",
-                    "qc_error_message",
-                    "error_message",
-                ]
-            ]
-            source_rows.to_csv(out_path, mode="a", header=True, index=False)
-            first_write = False
-            records.append(source_rows)
-            existing_keys = {
-                (row.model_type, row.target_type, row.model, row.phase, row.oxide, float(row.rel_error))
-                for row in source_rows[["model_type", "target_type", "model", "phase", "oxide", "rel_error"]]
-                .drop_duplicates()
-                .itertuples(index=False)
-            }
-            print(f"Reused {len(source_rows)} cpx-liq directional rows from {source_path}", flush=True)
 
     cpx_base, liq_base = split_inputs(test_df)
     baseline_predictions: dict[tuple[str, str, str], tuple[pd.Series, dict[object, str]]] = {}
@@ -1526,106 +1679,1177 @@ def compute_directional_equal_error_long(
             baseline_predictions[key] = safe_predict(spec, cpx_base, liq_base)
         return baseline_predictions[key]
 
+    for model_type in ["cpx_liq", "cpx_only"]:
+        model_specs = [spec for spec in specs if spec.model_type == model_type]
+        for perturb_spec in directional_single_oxide_specs(test_df, model_type):
+            phase = perturb_spec.phase
+            storage_oxide = perturb_spec.storage_oxide
+            display_oxide = perturb_spec.display_oxide
+            print(
+                f"Directional central OAT: {model_type} {phase} {display_oxide} "
+                f"({perturb_spec.rel_error_label}; {len(model_specs)} model-target entries)",
+                flush=True,
+            )
+            plus_df = test_df.copy()
+            minus_df = test_df.copy()
+            original = pd.to_numeric(test_df[storage_oxide], errors="coerce").fillna(0.0)
+            if perturb_spec.error_type == "absolute_wt_pct":
+                sigma = pd.Series(float(perturb_spec.abs_sigma), index=test_df.index, dtype="float64")
+            else:
+                sigma = original * float(perturb_spec.rel_error)
+            plus_value = original + sigma
+            minus_value = (original - sigma).clip(lower=0.0)
+            plus_df[storage_oxide] = plus_value
+            minus_df[storage_oxide] = minus_value
+
+            plus_qc = directional_qc_status(plus_df, phase)
+            minus_qc = directional_qc_status(minus_df, phase)
+            cpx_plus, liq_plus = split_inputs(plus_df)
+            cpx_minus, liq_minus = split_inputs(minus_df)
+
+            for spec in model_specs:
+                baseline_pred, baseline_errors = get_baseline_prediction(spec)
+                baseline_values = baseline_pred.reindex(test_df.index)
+                not_used_by_model = not model_uses_oxide(spec, phase, storage_oxide)
+                plus_status = plus_qc["status"].copy()
+                minus_status = minus_qc["status"].copy()
+                qc_message = _combine_side_messages(
+                    plus_status,
+                    plus_qc["qc_message"],
+                    minus_status,
+                    minus_qc["qc_message"],
+                )
+                combined_status = pd.Series("ok", index=test_df.index, dtype=object)
+                plus_qc_fail = plus_status.ne("ok")
+                minus_qc_fail = minus_status.ne("ok")
+                combined_status.loc[plus_qc_fail & ~minus_qc_fail] = "qc_failed_plus"
+                combined_status.loc[minus_qc_fail & ~plus_qc_fail] = "qc_failed_minus"
+                combined_status.loc[plus_qc_fail & minus_qc_fail] = "qc_failed_both"
+                rows = pd.DataFrame(
+                    {
+                        "id": test_df["id"],
+                        "split": "test_subset",
+                        "model_type": model_type,
+                        "model": spec.name,
+                        "target_type": spec.target_type,
+                        "phase": phase,
+                        "oxide": display_oxide,
+                        "storage_oxide": storage_oxide,
+                        "rel_error": perturb_spec.rel_error,
+                        "rel_error_label": perturb_spec.rel_error_label,
+                        "sign": "plus_minus",
+                        "baseline_value": original,
+                        "perturbed_value": np.nan,
+                        "plus_value": plus_value,
+                        "minus_value": minus_value,
+                        "sigma_value": sigma,
+                        "baseline_prediction": baseline_values,
+                        "perturbed_prediction": np.nan,
+                        "plus_prediction": np.nan,
+                        "minus_prediction": np.nan,
+                        "signed_effect": np.nan,
+                        "abs_effect": np.nan,
+                        "cpx_total": np.maximum(plus_qc["cpx_total"], minus_qc["cpx_total"]),
+                        "cpx_stoich_ratio": np.where(
+                            plus_qc["cpx_stoich_ratio"].sub(1.0).abs()
+                            >= minus_qc["cpx_stoich_ratio"].sub(1.0).abs(),
+                            plus_qc["cpx_stoich_ratio"],
+                            minus_qc["cpx_stoich_ratio"],
+                        ),
+                        "liq_total": np.maximum(plus_qc["liq_total"], minus_qc["liq_total"]),
+                        "plus_status": plus_status,
+                        "minus_status": minus_status,
+                        "not_used_by_model": not_used_by_model,
+                        "status": combined_status,
+                        "qc_error_message": qc_message,
+                        "error_message": "",
+                        "error_type": perturb_spec.error_type,
+                        "sensitivity_method": DIRECTIONAL_SENSITIVITY_METHOD,
+                        "framework_sensitivity_version": FRAMEWORK_SENSITIVITY_VERSION,
+                    }
+                )
+                for idx in rows.index:
+                    err = baseline_errors.get(idx, "")
+                    if err or pd.isna(rows.loc[idx, "baseline_prediction"]):
+                        rows.loc[idx, "status"] = "baseline_failed"
+                        rows.loc[idx, "plus_status"] = "baseline_failed"
+                        rows.loc[idx, "minus_status"] = "baseline_failed"
+                        rows.loc[idx, "error_message"] = err or "baseline prediction returned NaN"
+
+                side_ready = rows["status"].eq("ok")
+                if not_used_by_model:
+                    plus_pred = rows.loc[side_ready, "baseline_prediction"].astype(float)
+                    minus_pred = rows.loc[side_ready, "baseline_prediction"].astype(float)
+                    side_errors = {idx: "" for idx in rows.index[side_ready]}
+                    _apply_prediction_side(rows, side="plus", pred=plus_pred, errors=side_errors, ok_mask=side_ready)
+                    _apply_prediction_side(rows, side="minus", pred=minus_pred, errors=side_errors, ok_mask=side_ready)
+                else:
+                    plus_pred, plus_errors = safe_predict(spec, cpx_plus.loc[side_ready], liq_plus.loc[side_ready])
+                    minus_pred, minus_errors = safe_predict(spec, cpx_minus.loc[side_ready], liq_minus.loc[side_ready])
+                    _apply_prediction_side(rows, side="plus", pred=plus_pred, errors=plus_errors, ok_mask=side_ready)
+                    _apply_prediction_side(rows, side="minus", pred=minus_pred, errors=minus_errors, ok_mask=side_ready)
+
+                plus_calc_fail = side_ready & rows["plus_status"].eq("calculation_failed")
+                minus_calc_fail = side_ready & rows["minus_status"].eq("calculation_failed")
+                rows.loc[plus_calc_fail & ~minus_calc_fail, "status"] = "calculation_failed_plus"
+                rows.loc[minus_calc_fail & ~plus_calc_fail, "status"] = "calculation_failed_minus"
+                rows.loc[plus_calc_fail & minus_calc_fail, "status"] = "calculation_failed_both"
+
+                effect_ready = (
+                    rows["status"].eq("ok")
+                    & rows["plus_prediction"].notna()
+                    & rows["minus_prediction"].notna()
+                    & rows["baseline_prediction"].notna()
+                )
+                effect = (rows.loc[effect_ready, "plus_prediction"] - rows.loc[effect_ready, "minus_prediction"]) / 2.0
+                rows.loc[effect_ready, "signed_effect"] = effect
+                rows.loc[effect_ready, "abs_effect"] = effect.abs()
+
+                if out_path is not None:
+                    rows.to_csv(out_path, mode="a", header=first_write, index=False)
+                    first_write = False
+                records.append(rows)
+
+    return pd.concat(records, ignore_index=True)
+
+
+def _abbreviate_best_model_series(series: pd.Series, target_type: str) -> pd.Series:
+    """Convert selected workflow model names to Table 1 abbreviations."""
+    out = pd.Series(np.nan, index=series.index, dtype=object)
+    for idx, value in series.items():
+        if value is None or pd.isna(value):
+            continue
+        out.loc[idx] = get_model_abbreviation(str(value), target_type)
+    return out
+
+
+def _empty_framework_state(index: pd.Index, status: str, message: str = "") -> pd.DataFrame:
+    """Return an empty per-sample framework state after a workflow-level failure."""
+    return pd.DataFrame(
+        {
+            "prediction": pd.Series(np.nan, index=index, dtype="float64"),
+            "best_model": pd.Series(np.nan, index=index, dtype=object),
+            "status": pd.Series(status, index=index, dtype=object),
+            "error_message": pd.Series(message, index=index, dtype=object),
+            "rankable_model_count": pd.Series(np.nan, index=index, dtype="float64"),
+            "feature_ood_count": pd.Series(np.nan, index=index, dtype="float64"),
+            "tas_ood_count": pd.Series(np.nan, index=index, dtype="float64"),
+            "pt_ood_count": pd.Series(np.nan, index=index, dtype="float64"),
+        },
+        index=index,
+    )
+
+
+def _finite_reason_count(row: pd.Series) -> int:
+    """Count models that survived workflow filters and have finite deviation scores."""
+    count = 0
+    for value in row:
+        if isinstance(value, (int, float, np.integer, np.floating)) and np.isfinite(value):
+            count += 1
+    return count
+
+
+def predict_framework_state(
+    model_specs: list[ModelSpec],
+    *,
+    model_type: str,
+    target_type: str,
+    cpx: pd.DataFrame,
+    liq: pd.DataFrame,
+) -> pd.DataFrame:
+    """Run the AIMS4PT selection workflow and return per-sample final state."""
+    selected_specs = [
+        spec
+        for spec in model_specs
+        if spec.model_type == model_type and spec.target_type == target_type
+    ]
+    if not selected_specs:
+        return _empty_framework_state(cpx.index, "no_models", "No models available for this framework target.")
+
+    from aims4pt.data_tools.rocks import get_TAS_rock_types, get_volcanic_rock_series
+    from aims4pt.model_tools.CpxTBSelect import workflow_thermobarometry
+    from aims4pt.statistic_tools.density_region_analysis import rock_type_check
+
+    model_list = [spec.model for spec in selected_specs]
+    workflow = workflow_thermobarometry(model_list)
+    input_liq = liq if model_type == "cpx_liq" else pd.DataFrame(
+        {"H2O_liq": np.zeros(len(cpx), dtype=float)},
+        index=cpx.index,
+    )
+
+    prediction_df = pd.DataFrame(index=cpx.index)
+    ood_mask_df = pd.DataFrame(index=cpx.index, dtype=bool)
+    calculated_deviation_df = pd.DataFrame(index=cpx.index, dtype=float)
+    petrological_check_df = pd.DataFrame(index=cpx.index, dtype=bool)
+    p_t_mask_df = pd.DataFrame(False, index=cpx.index, columns=[], dtype=bool)
+    has_ood_detector: dict[str, bool] = {}
+
+    if model_type == "cpx_liq":
+        tas_rock_type = input_liq.apply(get_TAS_rock_types, axis=1)
+        volcanic_rock_series = input_liq.apply(get_volcanic_rock_series, axis=1)
+    else:
+        tas_rock_type = None
+        volcanic_rock_series = None
+
+    for spec in selected_specs:
+        model = spec.model
+        model_name = getattr(model, "model_name", spec.name)
+        pred, pred_errors = framework_safe_predict(spec, cpx, input_liq)
+        pred = pd.Series(pred, index=cpx.index, dtype="float64")
+        pred_failed = pred.isna() | pd.Series(
+            [bool(pred_errors.get(idx, "")) for idx in cpx.index],
+            index=cpx.index,
+            dtype=bool,
+        )
+        prediction_df[model_name] = pred
+
+        ood_detector = getattr(model, "OOD_detector", None)
+        has_ood_detector[model_name] = ood_detector is not None
+        if ood_detector is not None:
+            try:
+                ood_mask = ood_detector.is_ood(cpx, input_liq)
+            except TypeError:
+                ood_mask = ood_detector.is_ood(cpx)
+            except Exception:
+                ood_mask = np.ones(len(cpx), dtype=bool)
+        else:
+            ood_mask = np.zeros(len(cpx), dtype=bool)
+        ood_mask_df[model_name] = np.asarray(ood_mask, dtype=bool) | pred_failed.to_numpy(dtype=bool)
+
+        deviation_function = getattr(model, "deviation_function", None)
+        if deviation_function is not None:
+            try:
+                deviation_values = deviation_function.predict_deviation(cpx, input_liq)
+            except TypeError:
+                deviation_values = deviation_function.predict_deviation(cpx)
+            except Exception:
+                deviation_values = np.full(len(cpx), np.nan)
+        else:
+            deviation_values = np.full(len(cpx), np.nan)
+        calculated_deviation_df[model_name] = np.asarray(deviation_values, dtype=float)
+
+        if (
+            model_type == "cpx_liq"
+            and hasattr(model, "rock_types")
+            and hasattr(model, "volcanic_rock_series")
+            and tas_rock_type is not None
+            and volcanic_rock_series is not None
+        ):
+            tas_mask = [
+                rock_type_check(rt, model.rock_types, report=False)
+                for rt in tas_rock_type
+            ]
+            series_mask = [
+                rock_type_check(rs, model.volcanic_rock_series, report=False)
+                for rs in volcanic_rock_series
+            ]
+            petro_mask = [tas_ok and series_ok for tas_ok, series_ok in zip(tas_mask, series_mask)]
+            petrological_check_df[model_name] = np.asarray(petro_mask, dtype=bool)
+        else:
+            petrological_check_df[model_name] = np.ones(len(cpx), dtype=bool)
+
+        y_min = getattr(model, "y_min", None)
+        y_max = getattr(model, "y_max", None)
+        if y_min is not None and y_max is not None:
+            p_t_mask = (pred < y_min) | (pred > y_max) | pred_failed
+        else:
+            p_t_mask = pred_failed.copy()
+        p_t_mask_df[model_name] = np.asarray(p_t_mask, dtype=bool)
+
+    workflow.prediction_df = prediction_df
+    workflow.ood_mask_df = ood_mask_df
+    workflow.calculated_deviation_df = calculated_deviation_df
+    workflow.petrological_check_df = petrological_check_df
+    workflow.p_t_mask_df = p_t_mask_df
+    workflow.has_ood_detector = pd.Series(has_ood_detector)
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            prediction = workflow.decision()
+    except Exception as exc:
+        message = f"{type(exc).__name__}: {exc}"
+        return _empty_framework_state(cpx.index, "workflow_failed", message)
+
+    prediction = pd.Series(prediction, index=cpx.index, dtype="float64")
+    best_model = _abbreviate_best_model_series(workflow.get_best_model_series(), target_type)
+    status = pd.Series("ok", index=cpx.index, dtype=object)
+    status.loc[prediction.isna()] = "no_valid_framework_model"
+    error_message = pd.Series("", index=cpx.index, dtype=object)
+    error_message.loc[prediction.isna()] = "No selected framework prediction."
+
+    if workflow.failure_reason_df is not None:
+        rankable_model_count = workflow.failure_reason_df.apply(_finite_reason_count, axis=1)
+    else:
+        rankable_model_count = pd.Series(np.nan, index=cpx.index, dtype="float64")
+
+    feature_ood_count = (
+        workflow.ood_mask_df.sum(axis=1).astype(float)
+        if workflow.ood_mask_df is not None
+        else pd.Series(np.nan, index=cpx.index, dtype="float64")
+    )
+    tas_ood_count = (
+        (~workflow.petrological_check_df).sum(axis=1).astype(float)
+        if workflow.petrological_check_df is not None
+        else pd.Series(np.nan, index=cpx.index, dtype="float64")
+    )
+    pt_ood_count = (
+        workflow.p_t_mask_df.sum(axis=1).astype(float)
+        if workflow.p_t_mask_df is not None
+        else pd.Series(np.nan, index=cpx.index, dtype="float64")
+    )
+
+    return pd.DataFrame(
+        {
+            "prediction": prediction,
+            "best_model": best_model,
+            "status": status,
+            "error_message": error_message,
+            "rankable_model_count": rankable_model_count,
+            "feature_ood_count": feature_ood_count,
+            "tas_ood_count": tas_ood_count,
+            "pt_ood_count": pt_ood_count,
+        },
+        index=cpx.index,
+    )
+
+
+def compute_framework_baseline_states(
+    test_df: pd.DataFrame,
+    model_specs: list[ModelSpec],
+    out_path: Path,
+) -> dict[tuple[str, str], pd.DataFrame]:
+    """Compute baseline AIMS4PT final predictions for each independent framework."""
+    cpx, liq = split_inputs(test_df)
+    states: dict[tuple[str, str], pd.DataFrame] = {}
+    rows: list[dict[str, object]] = []
+    for model_type in ["cpx_liq", "cpx_only"]:
+        for target_type in ["P", "T"]:
+            state = predict_framework_state(
+                model_specs,
+                model_type=model_type,
+                target_type=target_type,
+                cpx=cpx,
+                liq=liq,
+            )
+            states[(model_type, target_type)] = state
+            for idx, sample in test_df.iterrows():
+                rows.append(
+                    {
+                        "id": sample["id"],
+                        "split": "test_subset",
+                        "model_type": model_type,
+                        "target_type": target_type,
+                        "prediction": state.loc[idx, "prediction"],
+                        "best_model": state.loc[idx, "best_model"],
+                        "status": state.loc[idx, "status"],
+                        "rankable_model_count": state.loc[idx, "rankable_model_count"],
+                        "feature_ood_count": state.loc[idx, "feature_ood_count"],
+                        "tas_ood_count": state.loc[idx, "tas_ood_count"],
+                        "pt_ood_count": state.loc[idx, "pt_ood_count"],
+                        "error_message": state.loc[idx, "error_message"],
+                    }
+                )
+    pd.DataFrame(rows).to_csv(out_path, index=False)
+    return states
+
+
+def expected_framework_directional_rows(test_df: pd.DataFrame, model_specs: list[ModelSpec]) -> int:
+    """Return the expected row count for framework directional sensitivity output."""
+    available_targets = {
+        model_type: {
+            spec.target_type
+            for spec in model_specs
+            if spec.model_type == model_type
+        }
+        for model_type in ["cpx_liq", "cpx_only"]
+    }
+    return expected_framework_directional_rows_for_targets(test_df, available_targets)
+
+
+def expected_framework_directional_rows_for_targets(
+    test_df: pd.DataFrame,
+    available_targets: dict[str, set[str]] | None = None,
+) -> int:
+    """Return expected framework rows without importing model objects."""
+    if available_targets is None:
+        available_targets = {
+            "cpx_liq": {"P", "T"},
+            "cpx_only": {"P", "T"},
+        }
+    total = 0
+    for model_type in ["cpx_liq", "cpx_only"]:
+        total += len(test_df) * len(directional_single_oxide_specs(test_df, model_type)) * len(available_targets[model_type])
+    return total
+
+
+def _combined_framework_status(
+    *,
+    baseline_status: object,
+    plus_status: object,
+    minus_status: object,
+    plus_qc_status: object,
+    minus_qc_status: object,
+) -> str:
+    """Combine QC and workflow side statuses into one row status."""
+    plus_qc_ok = str(plus_qc_status) == "ok"
+    minus_qc_ok = str(minus_qc_status) == "ok"
+    if not plus_qc_ok and not minus_qc_ok:
+        return "qc_failed_both"
+    if not plus_qc_ok:
+        return "qc_failed_plus"
+    if not minus_qc_ok:
+        return "qc_failed_minus"
+    if str(baseline_status) != "ok":
+        return "baseline_failed"
+    plus_ok = str(plus_status) == "ok"
+    minus_ok = str(minus_status) == "ok"
+    if plus_ok and minus_ok:
+        return "ok"
+    if not plus_ok and not minus_ok:
+        return "framework_failed_both"
+    if not plus_ok:
+        return "framework_failed_plus"
+    return "framework_failed_minus"
+
+
+def compute_framework_directional_long(
+    test_df: pd.DataFrame,
+    model_specs: list[ModelSpec],
+    *,
+    baseline_path: Path,
+    out_path: Path,
+) -> pd.DataFrame:
+    """Compute final AIMS4PT sensitivity to oxide-specific central perturbations."""
+    if out_path.exists():
+        out_path.unlink()
+    baseline_states = compute_framework_baseline_states(test_df, model_specs, baseline_path)
+    first_write = True
+    records: list[pd.DataFrame] = []
+
+    for model_type in ["cpx_liq", "cpx_only"]:
+        model_targets = sorted(
+            {
+                spec.target_type
+                for spec in model_specs
+                if spec.model_type == model_type
+            }
+        )
+        for perturb_spec in directional_single_oxide_specs(test_df, model_type):
+            phase = perturb_spec.phase
+            storage_oxide = perturb_spec.storage_oxide
+            display_oxide = perturb_spec.display_oxide
+            print(
+                f"Framework central OAT: {model_type} {phase} {display_oxide} "
+                f"({perturb_spec.rel_error_label}; targets={model_targets})",
+                flush=True,
+            )
+            plus_df = test_df.copy()
+            minus_df = test_df.copy()
+            original = pd.to_numeric(test_df[storage_oxide], errors="coerce").fillna(0.0)
+            if perturb_spec.error_type == "absolute_wt_pct":
+                sigma = pd.Series(float(perturb_spec.abs_sigma), index=test_df.index, dtype="float64")
+            else:
+                sigma = original * float(perturb_spec.rel_error)
+            plus_value = original + sigma
+            minus_value = (original - sigma).clip(lower=0.0)
+            plus_df[storage_oxide] = plus_value
+            minus_df[storage_oxide] = minus_value
+
+            plus_qc = directional_qc_status(plus_df, phase)
+            minus_qc = directional_qc_status(minus_df, phase)
+            cpx_plus, liq_plus = split_inputs(plus_df)
+            cpx_minus, liq_minus = split_inputs(minus_df)
+
+            for target_type in model_targets:
+                baseline_state = baseline_states[(model_type, target_type)]
+                plus_state = predict_framework_state(
+                    model_specs,
+                    model_type=model_type,
+                    target_type=target_type,
+                    cpx=cpx_plus,
+                    liq=liq_plus,
+                )
+                minus_state = predict_framework_state(
+                    model_specs,
+                    model_type=model_type,
+                    target_type=target_type,
+                    cpx=cpx_minus,
+                    liq=liq_minus,
+                )
+                rows = pd.DataFrame(
+                    {
+                        "id": test_df["id"],
+                        "split": "test_subset",
+                        "model_type": model_type,
+                        "model": "AIMS4PT",
+                        "target_type": target_type,
+                        "phase": phase,
+                        "oxide": display_oxide,
+                        "storage_oxide": storage_oxide,
+                        "rel_error": perturb_spec.rel_error,
+                        "rel_error_label": perturb_spec.rel_error_label,
+                        "sign": "plus_minus",
+                        "baseline_value": original,
+                        "plus_value": plus_value,
+                        "minus_value": minus_value,
+                        "sigma_value": sigma,
+                        "baseline_prediction": baseline_state["prediction"],
+                        "plus_prediction": plus_state["prediction"],
+                        "minus_prediction": minus_state["prediction"],
+                        "signed_effect": np.nan,
+                        "abs_effect": np.nan,
+                        "baseline_best_model": baseline_state["best_model"],
+                        "plus_best_model": plus_state["best_model"],
+                        "minus_best_model": minus_state["best_model"],
+                        "baseline_status": baseline_state["status"],
+                        "plus_status": plus_state["status"],
+                        "minus_status": minus_state["status"],
+                        "plus_model_switched": False,
+                        "minus_model_switched": False,
+                        "any_model_switched": False,
+                        "baseline_rankable_model_count": baseline_state["rankable_model_count"],
+                        "plus_rankable_model_count": plus_state["rankable_model_count"],
+                        "minus_rankable_model_count": minus_state["rankable_model_count"],
+                        "baseline_feature_ood_count": baseline_state["feature_ood_count"],
+                        "plus_feature_ood_count": plus_state["feature_ood_count"],
+                        "minus_feature_ood_count": minus_state["feature_ood_count"],
+                        "baseline_tas_ood_count": baseline_state["tas_ood_count"],
+                        "plus_tas_ood_count": plus_state["tas_ood_count"],
+                        "minus_tas_ood_count": minus_state["tas_ood_count"],
+                        "baseline_pt_ood_count": baseline_state["pt_ood_count"],
+                        "plus_pt_ood_count": plus_state["pt_ood_count"],
+                        "minus_pt_ood_count": minus_state["pt_ood_count"],
+                        "cpx_total": np.maximum(plus_qc["cpx_total"], minus_qc["cpx_total"]),
+                        "cpx_stoich_ratio": np.where(
+                            plus_qc["cpx_stoich_ratio"].sub(1.0).abs()
+                            >= minus_qc["cpx_stoich_ratio"].sub(1.0).abs(),
+                            plus_qc["cpx_stoich_ratio"],
+                            minus_qc["cpx_stoich_ratio"],
+                        ),
+                        "liq_total": np.maximum(plus_qc["liq_total"], minus_qc["liq_total"]),
+                        "plus_qc_status": plus_qc["status"],
+                        "minus_qc_status": minus_qc["status"],
+                        "status": "ok",
+                        "qc_error_message": _combine_side_messages(
+                            plus_qc["status"],
+                            plus_qc["qc_message"],
+                            minus_qc["status"],
+                            minus_qc["qc_message"],
+                        ),
+                        "error_message": "",
+                        "error_type": perturb_spec.error_type,
+                        "sensitivity_method": DIRECTIONAL_SENSITIVITY_METHOD,
+                        "framework_sensitivity_version": FRAMEWORK_SENSITIVITY_VERSION,
+                    }
+                )
+                rows["status"] = [
+                    _combined_framework_status(
+                        baseline_status=baseline_status,
+                        plus_status=plus_status,
+                        minus_status=minus_status,
+                        plus_qc_status=plus_qc_status,
+                        minus_qc_status=minus_qc_status,
+                    )
+                    for baseline_status, plus_status, minus_status, plus_qc_status, minus_qc_status in zip(
+                        rows["baseline_status"],
+                        rows["plus_status"],
+                        rows["minus_status"],
+                        rows["plus_qc_status"],
+                        rows["minus_qc_status"],
+                    )
+                ]
+                ready = (
+                    rows["status"].eq("ok")
+                    & rows["plus_prediction"].notna()
+                    & rows["minus_prediction"].notna()
+                )
+                effect = (rows.loc[ready, "plus_prediction"].astype(float) - rows.loc[ready, "minus_prediction"].astype(float)) / 2.0
+                rows.loc[ready, "signed_effect"] = effect
+                rows.loc[ready, "abs_effect"] = effect.abs()
+                plus_switch_ready = ready & rows["baseline_best_model"].notna() & rows["plus_best_model"].notna()
+                minus_switch_ready = ready & rows["baseline_best_model"].notna() & rows["minus_best_model"].notna()
+                rows.loc[plus_switch_ready, "plus_model_switched"] = (
+                    rows.loc[plus_switch_ready, "plus_best_model"].astype(str)
+                    != rows.loc[plus_switch_ready, "baseline_best_model"].astype(str)
+                )
+                rows.loc[minus_switch_ready, "minus_model_switched"] = (
+                    rows.loc[minus_switch_ready, "minus_best_model"].astype(str)
+                    != rows.loc[minus_switch_ready, "baseline_best_model"].astype(str)
+                )
+                rows["any_model_switched"] = rows["plus_model_switched"] | rows["minus_model_switched"]
+                rows["error_message"] = [
+                    "; ".join(
+                        message
+                        for message in [
+                            "" if str(plus_message) == "" else f"plus: {plus_message}",
+                            "" if str(minus_message) == "" else f"minus: {minus_message}",
+                        ]
+                        if message
+                    )
+                    for plus_message, minus_message in zip(
+                        plus_state["error_message"],
+                        minus_state["error_message"],
+                    )
+                ]
+
+                if out_path is not None:
+                    rows.to_csv(out_path, mode="a", header=first_write, index=False)
+                    first_write = False
+                records.append(rows)
+
+    return pd.concat(records, ignore_index=True)
+
+
+def summarize_framework_directional(long_df: pd.DataFrame) -> pd.DataFrame:
+    """Summarize framework final-result sensitivity by target, phase, and oxide."""
+    group_cols = ["model_type", "model", "target_type", "phase", "oxide", "rel_error", "rel_error_label", "error_type"]
+    ok = long_df[long_df["status"].eq("ok")].copy()
+    summary = (
+        ok.groupby(group_cols, dropna=False)
+        .agg(
+            n=("signed_effect", "size"),
+            median_sigma_value=("sigma_value", "median"),
+            median_signed_effect=("signed_effect", "median"),
+            mean_signed_effect=("signed_effect", "mean"),
+            p05_signed_effect=("signed_effect", lambda x: x.quantile(0.05)),
+            p95_signed_effect=("signed_effect", lambda x: x.quantile(0.95)),
+            median_abs_effect=("abs_effect", "median"),
+            p95_abs_effect=("abs_effect", lambda x: x.quantile(0.95)),
+            max_abs_effect=("abs_effect", "max"),
+            plus_model_switch_rate_pct=("plus_model_switched", lambda x: float(pd.Series(x, dtype=bool).mean() * 100.0)),
+            minus_model_switch_rate_pct=("minus_model_switched", lambda x: float(pd.Series(x, dtype=bool).mean() * 100.0)),
+            any_model_switch_rate_pct=("any_model_switched", lambda x: float(pd.Series(x, dtype=bool).mean() * 100.0)),
+            median_baseline_rankable_models=("baseline_rankable_model_count", "median"),
+            median_plus_rankable_models=("plus_rankable_model_count", "median"),
+            median_minus_rankable_models=("minus_rankable_model_count", "median"),
+        )
+        .reset_index()
+    )
+    failures = (
+        long_df[long_df["status"].ne("ok")]
+        .groupby(group_cols, dropna=False)
+        .size()
+        .reset_index(name="non_ok_n")
+    )
+    return summary.merge(failures, on=group_cols, how="left").fillna({"non_ok_n": 0})
+
+
+def _framework_matrix(summary: pd.DataFrame, *, model_type: str, target_type: str, value_col: str) -> pd.DataFrame | None:
+    """Build a phase-by-oxide matrix for framework summary values."""
+    phases = ["cpx", "liq"] if model_type == "cpx_liq" else ["cpx"]
+    scope = summary[
+        summary["model_type"].eq(model_type)
+        & summary["target_type"].eq(target_type)
+    ].copy()
+    if scope.empty:
+        return None
+    columns: list[str] = []
+    for phase in phases:
+        phase_cols = _phase_oxide_order(phase, set(scope.loc[scope["phase"].eq(phase), "oxide"].dropna()))
+        columns.extend([col for col in phase_cols if col not in columns])
+    if not columns:
+        return None
+    matrix = pd.DataFrame(index=phases, columns=columns, dtype=float)
+    values = scope.pivot_table(index="phase", columns="oxide", values=value_col, aggfunc="median")
+    for phase in phases:
+        for oxide in columns:
+            if phase in values.index and oxide in values.columns:
+                matrix.loc[phase, oxide] = values.loc[phase, oxide]
+    return matrix
+
+
+def _framework_heat_rgb(value: float, vmin: float, vmax: float, cmap: str) -> tuple[int, int, int]:
+    """Return a compact RGB ramp for framework heatmaps."""
+    if not np.isfinite(value):
+        return (244, 244, 244)
+    span = max(float(vmax) - float(vmin), 1e-12)
+    frac = float(np.clip((float(value) - float(vmin)) / span, 0.0, 1.0))
+    if str(cmap).lower().startswith("orange"):
+        low = np.array([255, 245, 230], dtype=float)
+        high = np.array([217, 72, 1], dtype=float)
+    else:
+        low = np.array([247, 251, 255], dtype=float)
+        high = np.array([8, 81, 156], dtype=float)
+    rgb = low + (high - low) * frac
+    return tuple(int(round(channel)) for channel in rgb)
+
+
+def _plot_framework_matrix(
+    matrix: pd.DataFrame | None,
+    *,
+    title: str,
+    cbar_label: str,
+    output_path: Path,
+    cmap: str = "Blues",
+    vmin: float = 0.0,
+    vmax: float | None = None,
+) -> int:
+    """Plot one framework heatmap matrix."""
+    if matrix is None or matrix.empty:
+        return 0
+    finite = matrix.to_numpy(dtype=float)
+    finite = finite[np.isfinite(finite)]
+    if vmax is None:
+        vmax = float(np.nanmax(finite)) if len(finite) else 1.0
+    if not np.isfinite(vmax) or vmax <= 0:
+        vmax = 1.0
+    fig_width = max(8.5, 0.50 * len(matrix.columns) + 2.0)
+    fig_height = max(2.9, 0.55 * len(matrix.index) + 2.0)
+    scale = 100
+    width = int(fig_width * scale)
+    height = int(fig_height * scale)
+    image = Image.new("RGB", (width, height), (255, 255, 255))
+    draw = ImageDraw.Draw(image)
+    fonts = {
+        "title": _pil_font(23),
+        "axis": _pil_font(15),
+        "tick": _pil_font(14),
+        "label": _pil_font(13),
+    }
+    ink = (20, 20, 20)
+    muted = (70, 70, 70)
+    axis = (115, 115, 115)
+    left = 105
+    right = 145
+    top = 82
+    bottom = 126
+    grid_w = max(120, width - left - right)
+    grid_h = max(42, height - top - bottom)
+    cell_w = grid_w / max(1, len(matrix.columns))
+    cell_h = grid_h / max(1, len(matrix.index))
+
+    title_lines = _wrap_title_lines(draw, title, fonts["title"], width - 48)
+    _, title_line_h = _text_size(draw, "Ag", fonts["title"])
+    title_y = 12
+    for line in title_lines[:2]:
+        line_w, _ = _text_size(draw, line, fonts["title"])
+        draw.text(((width - line_w) // 2, title_y), line, font=fonts["title"], fill=ink)
+        title_y += title_line_h + 3
+
+    values = matrix.to_numpy(dtype=float)
+    for r, phase in enumerate(matrix.index):
+        y0 = top + r * cell_h
+        label = str(phase)
+        lw, lh = _text_size(draw, label, fonts["tick"])
+        draw.text((left - lw - 10, int(y0 + (cell_h - lh) / 2)), label, font=fonts["tick"], fill=ink)
+        for c, _oxide in enumerate(matrix.columns):
+            x0 = left + c * cell_w
+            x1 = left + (c + 1) * cell_w
+            y1 = top + (r + 1) * cell_h
+            value = values[r, c]
+            draw.rectangle(
+                (int(x0), int(y0), int(x1) - 1, int(y1) - 1),
+                fill=_framework_heat_rgb(value, vmin, vmax, cmap),
+                outline=(255, 255, 255),
+            )
+
+    grid_right = left + grid_w
+    grid_bottom = top + grid_h
+    draw.rectangle((left, top, int(grid_right), int(grid_bottom)), outline=axis, width=1)
+    draw.text((18, top + max(0, int((grid_h - 16) / 2))), "Perturbed phase", font=fonts["axis"], fill=muted)
+    for c, oxide in enumerate(matrix.columns):
+        x0 = left + c * cell_w
+        _draw_rotated_text(
+            image,
+            str(oxide),
+            (int(x0 + cell_w / 2 - 8), int(grid_bottom + 8)),
+            fonts["label"],
+            ink,
+            angle=90,
+        )
+
+    bar_x = int(grid_right + 35)
+    bar_y = top
+    bar_w = 18
+    bar_h = int(grid_h)
+    for i in range(max(1, bar_h)):
+        value = float(vmax) - (float(vmax) - float(vmin)) * i / max(1, bar_h - 1)
+        draw.line((bar_x, bar_y + i, bar_x + bar_w, bar_y + i), fill=_framework_heat_rgb(value, vmin, vmax, cmap))
+    draw.rectangle((bar_x, bar_y, bar_x + bar_w, bar_y + bar_h), outline=axis, width=1)
+    for frac, value in [(0.0, vmax), (0.5, (float(vmin) + float(vmax)) / 2), (1.0, vmin)]:
+        y = int(bar_y + frac * bar_h)
+        draw.line((bar_x + bar_w + 3, y, bar_x + bar_w + 11, y), fill=axis, width=1)
+        draw.text((bar_x + bar_w + 15, y - 8), _format_abs_tick(value), font=fonts["tick"], fill=ink)
+    cbar_lines = _wrap_title_lines(draw, cbar_label, fonts["axis"], max(88, width - bar_x - 4))
+    label_y = max(4, bar_y - 46)
+    for line in cbar_lines[:2]:
+        draw.text((bar_x - 4, label_y), line, font=fonts["axis"], fill=ink)
+        label_y += 17
+    image.save(output_path, dpi=(300, 300))
+    return 1
+
+
+def _compose_framework_directional_composite(fig_dir: Path) -> int:
+    """Compose framework effect and switch-rate panels into one summary figure."""
+    rows = [
+        ("cpx_liq", "P"),
+        ("cpx_liq", "T"),
+        ("cpx_only", "P"),
+        ("cpx_only", "T"),
+    ]
+    panel_pairs: list[tuple[Image.Image, Image.Image]] = []
+    for model_type, target_type in rows:
+        effect_path = fig_dir / f"test_subset_framework_final_abs_effect_{model_type}_{target_type}.png"
+        switch_path = fig_dir / f"test_subset_framework_model_switch_rate_{model_type}_{target_type}.png"
+        if not effect_path.exists() or not switch_path.exists():
+            return 0
+        with Image.open(effect_path) as effect_image, Image.open(switch_path) as switch_image:
+            panel_pairs.append((effect_image.convert("RGB").copy(), switch_image.convert("RGB").copy()))
+
+    gap_x = 18
+    gap_y = 18
+    margin_x = 24
+    header_h = 72
+    col_widths = [
+        max(pair[0].width for pair in panel_pairs),
+        max(pair[1].width for pair in panel_pairs),
+    ]
+    row_heights = [max(left.height, right.height) for left, right in panel_pairs]
+    width = margin_x * 2 + col_widths[0] + gap_x + col_widths[1]
+    height = header_h + sum(row_heights) + gap_y * (len(row_heights) - 1) + margin_x
+    composite = Image.new("RGB", (width, height), (255, 255, 255))
+    draw = ImageDraw.Draw(composite)
+    title_font = _pil_font(34)
+    title = "AIMS4PT final-result sensitivity to analytical uncertainty"
+    title_w, _ = _text_size(draw, title, title_font)
+    draw.text(((width - title_w) // 2, 18), title, font=title_font, fill=(20, 20, 20))
+
+    y = header_h
+    for (left, right), row_h in zip(panel_pairs, row_heights):
+        left_x = margin_x + max(0, (col_widths[0] - left.width) // 2)
+        right_x = margin_x + col_widths[0] + gap_x + max(0, (col_widths[1] - right.width) // 2)
+        composite.paste(left, (left_x, y + max(0, (row_h - left.height) // 2)))
+        composite.paste(right, (right_x, y + max(0, (row_h - right.height) // 2)))
+        y += row_h + gap_y
+
+    composite.save(fig_dir / "test_subset_framework_final_sensitivity_composite.png", dpi=(300, 300))
+    return 1
+
+
+def plot_framework_directional_figures(summary: pd.DataFrame, fig_dir: Path) -> int:
+    """Plot final AIMS4PT sensitivity and model-switch rates."""
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    for old_png in fig_dir.glob("test_subset_framework_*.png"):
+        old_png.unlink()
+    count = 0
+    for model_type, label in [("cpx_liq", "cpx-liquid"), ("cpx_only", "cpx-only")]:
+        for target_type, target_label, unit in [("P", "barometry", "kbar"), ("T", "thermometry", "deg C")]:
+            effect_matrix = _framework_matrix(
+                summary,
+                model_type=model_type,
+                target_type=target_type,
+                value_col="median_abs_effect",
+            )
+            count += _plot_framework_matrix(
+                effect_matrix,
+                title=f"AIMS4PT final {target_label} sensitivity: {label}",
+                cbar_label=f"Median abs effect ({unit})",
+                output_path=fig_dir / f"test_subset_framework_final_abs_effect_{model_type}_{target_type}.png",
+                cmap="Blues",
+            )
+            switch_matrix = _framework_matrix(
+                summary,
+                model_type=model_type,
+                target_type=target_type,
+                value_col="any_model_switch_rate_pct",
+            )
+            count += _plot_framework_matrix(
+                switch_matrix,
+                title=f"AIMS4PT selected-model switch rate: {label} {target_type}",
+                cbar_label="Model-switch rate (%)",
+                output_path=fig_dir / f"test_subset_framework_model_switch_rate_{model_type}_{target_type}.png",
+                cmap="Oranges",
+                vmin=0.0,
+                vmax=100.0,
+            )
+    count += _compose_framework_directional_composite(fig_dir)
+    return count
+
+
+def run_framework_directional_analysis(
+    test_df: pd.DataFrame,
+    paths: dict[str, Path],
+    reuse_existing: bool,
+) -> tuple[pd.DataFrame, int]:
+    """Run final AIMS4PT framework-level directional sensitivity analysis."""
+    long_path = paths["framework"] / "framework_directional_oat_long_test_subset.csv"
+    baseline_path = paths["framework"] / "framework_baseline_predictions_test_subset.csv"
+    summary_path = paths["framework"] / "framework_directional_oat_summary_test_subset.csv"
+    overview_path = paths["framework"] / "framework_directional_oat_overview_test_subset.csv"
+    model_specs: list[ModelSpec] | None = None
+    expected_rows = expected_framework_directional_rows_for_targets(test_df)
+    required_cols = {
+        "model_type",
+        "model",
+        "target_type",
+        "phase",
+        "oxide",
+        "plus_prediction",
+        "minus_prediction",
+        "baseline_best_model",
+        "plus_best_model",
+        "minus_best_model",
+        "any_model_switched",
+        "sensitivity_method",
+        "framework_sensitivity_version",
+    }
+
+    def recompute_long_df() -> pd.DataFrame:
+        """Recompute framework rows into a temporary CSV before replacing the final output."""
+        nonlocal model_specs
+        if model_specs is None:
+            model_specs = make_model_specs("cpx_liq") + make_model_specs("cpx_only")
+        temp_path = long_path.with_name(f"{long_path.stem}.tmp.csv")
+        if temp_path.exists():
+            temp_path.unlink()
+        computed = compute_framework_directional_long(
+            test_df,
+            model_specs,
+            baseline_path=baseline_path,
+            out_path=temp_path,
+        )
+        temp_path.replace(long_path)
+        return computed
+
+    if reuse_existing and long_path.exists():
+        candidate = pd.read_csv(long_path, low_memory=False)
+        if (
+            len(candidate) == expected_rows
+            and required_cols.issubset(candidate.columns)
+            and candidate["sensitivity_method"].eq(DIRECTIONAL_SENSITIVITY_METHOD).all()
+            and candidate["framework_sensitivity_version"].eq(FRAMEWORK_SENSITIVITY_VERSION).all()
+        ):
+            long_df = candidate
+            print(f"Reused framework directional OAT results: {long_path}")
+        else:
+            long_df = recompute_long_df()
+    else:
+        long_df = recompute_long_df()
+
+    summary = summarize_framework_directional(long_df)
+    summary.to_csv(summary_path, index=False)
+    overview = (
+        summary.groupby(["model_type", "target_type", "phase"], dropna=False)
+        .agg(
+            oxide_n=("oxide", "nunique"),
+            max_median_abs_effect=("median_abs_effect", "max"),
+            median_median_abs_effect=("median_abs_effect", "median"),
+            max_model_switch_rate_pct=("any_model_switch_rate_pct", "max"),
+            median_model_switch_rate_pct=("any_model_switch_rate_pct", "median"),
+        )
+        .reset_index()
+    )
+    overview.to_csv(overview_path, index=False)
+    fig_count = plot_framework_directional_figures(summary, paths["framework_fig"])
+    return long_df, fig_count
+
+
+def directional_all_oxide_groups(test_df: pd.DataFrame, model_type: str) -> list[tuple[str, str, list[str]]]:
+    """Return simultaneous all-oxide perturbation groups."""
+    cpx_oxides = [oxide for oxide in CPX_OXIDES if oxide in test_df.columns]
+    liq_oxides = [oxide for oxide in LIQ_OXIDES if oxide in test_df.columns]
+    groups: list[tuple[str, str, list[str]]] = []
+    if cpx_oxides:
+        groups.append(("cpx", "all_cpx_oxides", cpx_oxides))
+    if model_type == "cpx_liq" and liq_oxides:
+        groups.append(("liq", "all_liq_oxides", liq_oxides))
+    if model_type == "cpx_liq" and cpx_oxides and liq_oxides:
+        groups.append(("cpx_liq", "all_cpx_liq_oxides", cpx_oxides + liq_oxides))
+    return groups
+
+
+def run_directional_all_oxides_analysis(
+    test_df: pd.DataFrame,
+    paths: dict[str, Path],
+    reuse_existing: bool,
+) -> pd.DataFrame:
+    """Run matched-error simultaneous all-oxide perturbations."""
+    long_path = paths["analytical"] / "directional_equal_error_all_oxides_long_test_subset.csv"
+    summary_path = paths["analytical"] / "directional_equal_error_all_oxides_summary_test_subset.csv"
+    overview_path = paths["analytical"] / "directional_equal_error_all_oxides_overview_test_subset.csv"
+    specs = make_model_specs("cpx_liq") + make_model_specs("cpx_only")
+    levels = [(0.010, "1pct"), (0.020, "2pct")]
+    expected_rows = 0
+    for model_type in ["cpx_liq", "cpx_only"]:
+        model_specs = [spec for spec in specs if spec.model_type == model_type]
+        expected_rows += len(test_df) * len(levels) * len(model_specs) * len(directional_all_oxide_groups(test_df, model_type))
+
+    if reuse_existing and long_path.exists():
+        candidate = pd.read_csv(long_path, low_memory=False)
+        expected_models = {spec.name for spec in specs}
+        actual_models = set(candidate["model"].dropna().astype(str))
+        if (
+            len(candidate) == expected_rows
+            and set(candidate["model_type"].dropna()) == {"cpx_liq", "cpx_only"}
+            and actual_models == expected_models
+        ):
+            long_df = candidate
+            print(f"Reused directional all-oxide results: {long_path}", flush=True)
+        else:
+            print(
+                "Existing directional all-oxide results are not compatible; "
+                f"recomputing. rows={len(candidate)}, expected_rows={expected_rows}, "
+                f"models={sorted(actual_models)}",
+                flush=True,
+            )
+            long_df = compute_directional_all_oxides_long(test_df, specs, long_path)
+    else:
+        long_df = compute_directional_all_oxides_long(test_df, specs, long_path)
+
+    summary = summarize_directional_equal_error(long_df)
+    summary.to_csv(summary_path, index=False)
+    overview = (
+        summary.groupby(["model_type", "target_type", "phase", "oxide", "rel_error"], dropna=False)
+        .agg(
+            model_n=("model", "nunique"),
+            median_of_model_median_signed_effect=("median_signed_effect", "median"),
+            median_of_model_median_abs_effect=("median_abs_effect", "median"),
+            p95_of_model_median_abs_effect=("median_abs_effect", lambda x: x.quantile(0.95)),
+            max_model_median_abs_effect=("median_abs_effect", "max"),
+            non_ok_n=("non_ok_n", "sum"),
+        )
+        .reset_index()
+    )
+    overview.to_csv(overview_path, index=False)
+    fig_count = plot_directional_all_oxides_figures(long_df, paths["analytical_fig"])
+    print(f"Directional all-oxide rows: {len(long_df)}", flush=True)
+    print(f"Directional all-oxide figures: {fig_count}", flush=True)
+    return long_df
+
+
+def compute_directional_all_oxides_long(
+    test_df: pd.DataFrame,
+    specs: list[ModelSpec],
+    out_path: Path,
+) -> pd.DataFrame:
+    """Compute matched-error effects from perturbing all oxides in a group at once."""
+    if out_path.exists():
+        out_path.unlink()
+
+    cpx_base, liq_base = split_inputs(test_df)
+    baseline_predictions: dict[tuple[str, str, str], tuple[pd.Series, dict[object, str]]] = {}
+
+    def get_baseline_prediction(spec: ModelSpec) -> tuple[pd.Series, dict[object, str]]:
+        """Compute and cache baseline predictions only when a model is needed."""
+        key = (spec.model_type, spec.target_type, spec.name)
+        if key not in baseline_predictions:
+            print(
+                f"Baseline prediction: {spec.model_type} {spec.target_type} {spec.name}",
+                flush=True,
+            )
+            baseline_predictions[key] = safe_predict(spec, cpx_base, liq_base)
+        return baseline_predictions[key]
+
+    records: list[pd.DataFrame] = []
+    first_write = True
     levels = [(0.010, "1pct"), (0.020, "2pct")]
     for model_type in ["cpx_liq", "cpx_only"]:
         model_specs = [spec for spec in specs if spec.model_type == model_type]
-        phases = ["cpx", "liq"] if model_type == "cpx_liq" else ["cpx"]
         for rel_error, rel_label in levels:
-            for phase in phases:
-                oxides = CPX_OXIDES if phase == "cpx" else LIQ_OXIDES
-                oxides = [oxide for oxide in oxides if oxide in test_df.columns]
+            for phase, group_label, oxides in directional_all_oxide_groups(test_df, model_type):
+                print(
+                    f"Directional all-oxide OAT: {model_type} {rel_label} "
+                    f"{group_label} ({len(model_specs)} model-target entries)",
+                    flush=True,
+                )
+                perturbed = test_df.copy()
                 for oxide in oxides:
-                    pending_specs = [
-                        spec
-                        for spec in model_specs
-                        if (spec.model_type, spec.target_type, spec.name, phase, oxide, float(rel_error))
-                        not in existing_keys
-                    ]
-                    if not pending_specs:
-                        continue
-                    print(
-                        f"Directional equal-error OAT: {model_type} {rel_label} "
-                        f"{phase} {oxide} ({len(pending_specs)} model-target entries)",
-                        flush=True,
-                    )
-                    perturbed = test_df.copy()
                     original = pd.to_numeric(perturbed[oxide], errors="coerce").fillna(0.0)
-                    new_value = original * (1.0 + rel_error)
-                    perturbed[oxide] = new_value
+                    perturbed[oxide] = original * (1.0 + rel_error)
 
-                    cpx_total = oxide_total(perturbed, "cpx")
-                    liq_total = oxide_total(perturbed, "liq")
-                    stoich = cpx_stoich_ratio(perturbed)
-                    base_status = pd.Series("ok", index=perturbed.index, dtype=object)
-                    qc_message = pd.Series("", index=perturbed.index, dtype=object)
-                    if phase == "cpx":
-                        cpx_fail = (~cpx_total.between(98, 102)) | (~stoich.between(0.9, 1.1)) | stoich.isna()
-                        base_status.loc[cpx_fail] = "qc_failed_cpx"
-                        qc_message.loc[cpx_fail] = "cpx total or stoichiometry outside accepted range"
-                    else:
-                        liq_fail = liq_total > 105
-                        base_status.loc[liq_fail] = "qc_failed_liq_total_high"
-                        qc_message.loc[liq_fail] = "liquid total exceeds 105 wt.%"
+                cpx_total_base = oxide_total(test_df, "cpx")
+                liq_total_base = oxide_total(test_df, "liq")
+                cpx_total = oxide_total(perturbed, "cpx")
+                liq_total = oxide_total(perturbed, "liq")
+                stoich = cpx_stoich_ratio(perturbed)
+                base_status = pd.Series("ok", index=perturbed.index, dtype=object)
+                qc_message = pd.Series("", index=perturbed.index, dtype=object)
 
-                    cpx_perturbed, liq_perturbed = split_inputs(perturbed)
-                    for spec in pending_specs:
-                        baseline_pred, baseline_errors = get_baseline_prediction(spec)
-                        not_used_by_model = not model_uses_oxide(spec, phase, oxide)
-                        rows = pd.DataFrame(
-                            {
-                                "id": perturbed["id"],
-                                "split": "test_subset",
-                                "model_type": model_type,
-                                "model": spec.name,
-                                "target_type": spec.target_type,
-                                "phase": phase,
-                                "oxide": oxide,
-                                "rel_error": rel_error,
-                                "rel_error_label": rel_label,
-                                "sign": "plus",
-                                "baseline_value": original,
-                                "perturbed_value": new_value,
-                                "baseline_prediction": baseline_pred.reindex(perturbed.index),
-                                "perturbed_prediction": np.nan,
-                                "signed_effect": np.nan,
-                                "abs_effect": np.nan,
-                                "cpx_total": cpx_total,
-                                "cpx_stoich_ratio": stoich,
-                                "liq_total": liq_total,
-                                "not_used_by_model": not_used_by_model,
-                                "status": base_status,
-                                "qc_error_message": qc_message,
-                                "error_message": "",
-                            }
-                        )
-                        for idx in rows.index:
-                            err = baseline_errors.get(idx, "")
-                            if err or pd.isna(rows.loc[idx, "baseline_prediction"]):
-                                rows.loc[idx, "status"] = "baseline_failed"
-                                rows.loc[idx, "error_message"] = err or "baseline prediction returned NaN"
+                includes_cpx = any(oxide.endswith("_cpx") for oxide in oxides)
+                includes_liq = any(oxide.endswith("_liq") for oxide in oxides)
+                cpx_fail = pd.Series(False, index=perturbed.index)
+                liq_fail = pd.Series(False, index=perturbed.index)
+                if includes_cpx:
+                    cpx_fail = (
+                        (~cpx_total.between(CPX_TOTAL_MIN, CPX_TOTAL_MAX))
+                        | (~stoich.between(CPX_STOICH_MIN, CPX_STOICH_MAX))
+                        | stoich.isna()
+                    )
+                if includes_liq:
+                    liq_fail = liq_total > 105
+                both_fail = cpx_fail & liq_fail
+                base_status.loc[cpx_fail] = "qc_failed_cpx"
+                qc_message.loc[cpx_fail] = "cpx total or stoichiometry outside accepted range"
+                base_status.loc[liq_fail] = "qc_failed_liq_total_high"
+                qc_message.loc[liq_fail] = "liquid total exceeds 105 wt.%"
+                base_status.loc[both_fail] = "qc_failed_cpx_and_liq"
+                qc_message.loc[both_fail] = "cpx and liquid QC checks failed"
 
-                        ok_mask = rows["status"].eq("ok")
-                        if not_used_by_model:
-                            pred = rows.loc[ok_mask, "baseline_prediction"].astype(float)
-                            errors = {idx: "" for idx in rows.index[ok_mask]}
-                        else:
-                            pred, errors = safe_predict(spec, cpx_perturbed.loc[ok_mask], liq_perturbed.loc[ok_mask])
+                if phase == "cpx":
+                    baseline_value = cpx_total_base
+                    perturbed_value = cpx_total
+                elif phase == "liq":
+                    baseline_value = liq_total_base
+                    perturbed_value = liq_total
+                else:
+                    baseline_value = cpx_total_base + liq_total_base
+                    perturbed_value = cpx_total + liq_total
 
-                        for idx in rows.index[ok_mask]:
-                            err = errors.get(idx, "")
-                            value = pred.loc[idx] if idx in pred.index else np.nan
-                            if err or pd.isna(value):
-                                rows.loc[idx, "status"] = "calculation_failed"
-                                rows.loc[idx, "error_message"] = err or "prediction returned NaN"
-                                continue
-                            rows.loc[idx, "perturbed_prediction"] = value
-                            effect = value - rows.loc[idx, "baseline_prediction"]
-                            rows.loc[idx, "signed_effect"] = effect
-                            rows.loc[idx, "abs_effect"] = abs(effect)
+                cpx_perturbed, liq_perturbed = split_inputs(perturbed)
+                for spec in model_specs:
+                    baseline_pred, baseline_errors = get_baseline_prediction(spec)
+                    rows = pd.DataFrame(
+                        {
+                            "id": perturbed["id"],
+                            "split": "test_subset",
+                            "model_type": model_type,
+                            "model": spec.name,
+                            "target_type": spec.target_type,
+                            "phase": phase,
+                            "oxide": group_label,
+                            "rel_error": rel_error,
+                            "rel_error_label": rel_label,
+                            "sign": "plus",
+                            "baseline_value": baseline_value,
+                            "perturbed_value": perturbed_value,
+                            "baseline_prediction": baseline_pred.reindex(perturbed.index),
+                            "perturbed_prediction": np.nan,
+                            "signed_effect": np.nan,
+                            "abs_effect": np.nan,
+                            "cpx_total": cpx_total,
+                            "cpx_stoich_ratio": stoich,
+                            "liq_total": liq_total,
+                            "not_used_by_model": False,
+                            "status": base_status,
+                            "qc_error_message": qc_message,
+                            "error_message": "",
+                            "oxide_count": len(oxides),
+                            "perturbed_oxides": ";".join(oxides),
+                        }
+                    )
+                    for idx in rows.index:
+                        err = baseline_errors.get(idx, "")
+                        if err or pd.isna(rows.loc[idx, "baseline_prediction"]):
+                            rows.loc[idx, "status"] = "baseline_failed"
+                            rows.loc[idx, "error_message"] = err or "baseline prediction returned NaN"
 
-                        rows.to_csv(out_path, mode="a", header=first_write, index=False)
-                        first_write = False
-                        records.append(rows)
+                    ok_mask = rows["status"].eq("ok")
+                    pred, errors = safe_predict(spec, cpx_perturbed.loc[ok_mask], liq_perturbed.loc[ok_mask])
+                    for idx in rows.index[ok_mask]:
+                        err = errors.get(idx, "")
+                        value = pred.loc[idx] if idx in pred.index else np.nan
+                        if err or pd.isna(value):
+                            rows.loc[idx, "status"] = "calculation_failed"
+                            rows.loc[idx, "error_message"] = err or "prediction returned NaN"
+                            continue
+                        rows.loc[idx, "perturbed_prediction"] = value
+                        effect = value - rows.loc[idx, "baseline_prediction"]
+                        rows.loc[idx, "signed_effect"] = effect
+                        rows.loc[idx, "abs_effect"] = abs(effect)
+
+                    rows.to_csv(out_path, mode="a", header=first_write, index=False)
+                    first_write = False
+                    records.append(rows)
 
     return pd.concat(records, ignore_index=True)
 
@@ -1668,7 +2892,7 @@ def repair_directional_equal_error_analysis(
     )
     preserved = existing.loc[~replace_mask].copy()
     repaired = pd.concat([preserved, rows], ignore_index=True)
-    sort_cols = ["model_type", "target_type", "model", "rel_error", "phase", "oxide", "id"]
+    sort_cols = ["model_type", "target_type", "model", "phase", "oxide", "rel_error_label", "id"]
     repaired = repaired.sort_values(sort_cols, kind="stable").reset_index(drop=True)
     repaired.to_csv(long_path, index=False)
 
@@ -1686,123 +2910,31 @@ def repair_directional_equal_error_analysis(
 
 def compute_directional_equal_error_subset(test_df: pd.DataFrame, specs: list[ModelSpec]) -> pd.DataFrame:
     """Compute directional OAT rows for a selected set of model-target entries."""
-    cpx_base, liq_base = split_inputs(test_df)
-    baseline_predictions: dict[tuple[str, str, str], tuple[pd.Series, dict[object, str]]] = {}
-
-    def get_baseline_prediction(spec: ModelSpec) -> tuple[pd.Series, dict[object, str]]:
-        """Compute and cache baseline predictions only when a selected model is needed."""
-        key = (spec.model_type, spec.target_type, spec.name)
-        if key not in baseline_predictions:
-            print(
-                f"Baseline prediction: {spec.model_type} {spec.target_type} {spec.name}",
-                flush=True,
-            )
-            baseline_predictions[key] = safe_predict(spec, cpx_base, liq_base)
-        return baseline_predictions[key]
-
-    records: list[pd.DataFrame] = []
-    levels = [(0.010, "1pct"), (0.020, "2pct")]
-    for model_type in sorted({spec.model_type for spec in specs}):
-        model_specs = [spec for spec in specs if spec.model_type == model_type]
-        phases = ["cpx", "liq"] if model_type == "cpx_liq" else ["cpx"]
-        for rel_error, rel_label in levels:
-            for phase in phases:
-                oxides = CPX_OXIDES if phase == "cpx" else LIQ_OXIDES
-                oxides = [oxide for oxide in oxides if oxide in test_df.columns]
-                for oxide in oxides:
-                    print(
-                        f"Directional repair OAT: {model_type} {rel_label} "
-                        f"{phase} {oxide} ({len(model_specs)} model-target entries)",
-                        flush=True,
-                    )
-                    perturbed = test_df.copy()
-                    original = pd.to_numeric(perturbed[oxide], errors="coerce").fillna(0.0)
-                    new_value = original * (1.0 + rel_error)
-                    perturbed[oxide] = new_value
-
-                    cpx_total = oxide_total(perturbed, "cpx")
-                    liq_total = oxide_total(perturbed, "liq")
-                    stoich = cpx_stoich_ratio(perturbed)
-                    base_status = pd.Series("ok", index=perturbed.index, dtype=object)
-                    qc_message = pd.Series("", index=perturbed.index, dtype=object)
-                    if phase == "cpx":
-                        cpx_fail = (~cpx_total.between(98, 102)) | (~stoich.between(0.9, 1.1)) | stoich.isna()
-                        base_status.loc[cpx_fail] = "qc_failed_cpx"
-                        qc_message.loc[cpx_fail] = "cpx total or stoichiometry outside accepted range"
-                    else:
-                        liq_fail = liq_total > 105
-                        base_status.loc[liq_fail] = "qc_failed_liq_total_high"
-                        qc_message.loc[liq_fail] = "liquid total exceeds 105 wt.%"
-
-                    cpx_perturbed, liq_perturbed = split_inputs(perturbed)
-                    for spec in model_specs:
-                        baseline_pred, baseline_errors = get_baseline_prediction(spec)
-                        not_used_by_model = not model_uses_oxide(spec, phase, oxide)
-                        rows = pd.DataFrame(
-                            {
-                                "id": perturbed["id"],
-                                "split": "test_subset",
-                                "model_type": model_type,
-                                "model": spec.name,
-                                "target_type": spec.target_type,
-                                "phase": phase,
-                                "oxide": oxide,
-                                "rel_error": rel_error,
-                                "rel_error_label": rel_label,
-                                "sign": "plus",
-                                "baseline_value": original,
-                                "perturbed_value": new_value,
-                                "baseline_prediction": baseline_pred.reindex(perturbed.index),
-                                "perturbed_prediction": np.nan,
-                                "signed_effect": np.nan,
-                                "abs_effect": np.nan,
-                                "cpx_total": cpx_total,
-                                "cpx_stoich_ratio": stoich,
-                                "liq_total": liq_total,
-                                "not_used_by_model": not_used_by_model,
-                                "status": base_status,
-                                "qc_error_message": qc_message,
-                                "error_message": "",
-                            }
-                        )
-                        for idx in rows.index:
-                            err = baseline_errors.get(idx, "")
-                            if err or pd.isna(rows.loc[idx, "baseline_prediction"]):
-                                rows.loc[idx, "status"] = "baseline_failed"
-                                rows.loc[idx, "error_message"] = err or "baseline prediction returned NaN"
-
-                        ok_mask = rows["status"].eq("ok")
-                        if not_used_by_model:
-                            pred = rows.loc[ok_mask, "baseline_prediction"].astype(float)
-                            errors = {idx: "" for idx in rows.index[ok_mask]}
-                        else:
-                            pred, errors = safe_predict(spec, cpx_perturbed.loc[ok_mask], liq_perturbed.loc[ok_mask])
-
-                        for idx in rows.index[ok_mask]:
-                            err = errors.get(idx, "")
-                            value = pred.loc[idx] if idx in pred.index else np.nan
-                            if err or pd.isna(value):
-                                rows.loc[idx, "status"] = "calculation_failed"
-                                rows.loc[idx, "error_message"] = err or "prediction returned NaN"
-                                continue
-                            rows.loc[idx, "perturbed_prediction"] = value
-                            effect = value - rows.loc[idx, "baseline_prediction"]
-                            rows.loc[idx, "signed_effect"] = effect
-                            rows.loc[idx, "abs_effect"] = abs(effect)
-                        records.append(rows)
-
-    return pd.concat(records, ignore_index=True)
+    return compute_directional_central_difference(test_df, specs, out_path=None)
 
 
 def summarize_directional_equal_error(long_df: pd.DataFrame) -> pd.DataFrame:
     """Summarize directional equal-error OAT by model and feature."""
-    ok = long_df[long_df["status"].eq("ok")].copy()
+    df = long_df.copy()
+    if "rel_error_label" not in df.columns:
+        df["rel_error_label"] = df["rel_error"].map(
+            lambda value: "" if pd.isna(value) else directional_rel_error_label(float(value))
+        )
+    if "error_type" not in df.columns:
+        df["error_type"] = "relative"
+    if "sigma_value" not in df.columns:
+        df["sigma_value"] = np.nan
+    group_cols = ["model_type", "model", "target_type", "phase", "oxide", "rel_error", "rel_error_label", "error_type"]
+    ok = df[df["status"].eq("ok")].copy()
     summary = (
-        ok.groupby(["model_type", "model", "target_type", "phase", "oxide", "rel_error"], dropna=False)
+        ok.groupby(group_cols, dropna=False)
         .agg(
             n=("signed_effect", "size"),
+            median_sigma_value=("sigma_value", "median"),
             median_signed_effect=("signed_effect", "median"),
             mean_signed_effect=("signed_effect", "mean"),
+            p05_signed_effect=("signed_effect", lambda x: x.quantile(0.05)),
+            p95_signed_effect=("signed_effect", lambda x: x.quantile(0.95)),
             median_abs_effect=("abs_effect", "median"),
             p95_abs_effect=("abs_effect", lambda x: x.quantile(0.95)),
             max_abs_effect=("abs_effect", "max"),
@@ -1810,14 +2942,14 @@ def summarize_directional_equal_error(long_df: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
     failures = (
-        long_df[long_df["status"].ne("ok")]
-        .groupby(["model_type", "model", "target_type", "phase", "oxide", "rel_error"], dropna=False)
+        df[df["status"].ne("ok")]
+        .groupby(group_cols, dropna=False)
         .size()
         .reset_index(name="non_ok_n")
     )
     return summary.merge(
         failures,
-        on=["model_type", "model", "target_type", "phase", "oxide", "rel_error"],
+        on=group_cols,
         how="left",
     ).fillna({"non_ok_n": 0})
 
@@ -1955,6 +3087,8 @@ def plot_directional_equal_error_figures(long_df: pd.DataFrame, fig_dir: Path) -
         old_png.unlink()
     for old_png in fig_dir.glob("test_subset_directional_effect_heatmap_*.png"):
         old_png.unlink()
+    for old_png in fig_dir.glob("test_subset_directional_pm_effect_*.png"):
+        old_png.unlink()
 
     ok = long_df[long_df["status"].eq("ok")].copy()
     count = 0
@@ -1969,119 +3103,112 @@ def plot_directional_equal_error_figures(long_df: pd.DataFrame, fig_dir: Path) -
     layout = {"cell_w": 70, "cell_h": 25, "feature_label_w": 112, "header_h": 54}
 
     for model_type in ["cpx_liq", "cpx_only"]:
-        for rel_error, rel_label in [(0.010, "1pct"), (0.020, "2pct")]:
-            scope = long_df[long_df["model_type"].eq(model_type) & long_df["rel_error"].eq(rel_error)]
-            data = ok[ok["model_type"].eq(model_type) & ok["rel_error"].eq(rel_error)]
-            if scope.empty:
+        scope = long_df[long_df["model_type"].eq(model_type)].copy()
+        data = ok[ok["model_type"].eq(model_type)].copy()
+        if scope.empty:
+            continue
+
+        feature_order = []
+        cpx_order = directional_display_oxide_order("cpx", set(scope.loc[scope["phase"].eq("cpx"), "oxide"].dropna()))
+        feature_order.extend([f"cpx:{oxide_base_name(oxide, 'cpx')}" for oxide in cpx_order])
+        if model_type == "cpx_liq":
+            liq_order = directional_display_oxide_order("liq", set(scope.loc[scope["phase"].eq("liq"), "oxide"].dropna()))
+            feature_order.extend([f"liq:{oxide_base_name(oxide, 'liq')}" for oxide in liq_order])
+
+        matrices = []
+        for target_type in ["P", "T"]:
+            target_scope = scope[scope["target_type"].eq(target_type)].copy()
+            model_order = list(dict.fromkeys(target_scope["model"].dropna().astype(str)))
+            if not model_order:
+                matrices.append(None)
                 continue
-
-            matrices = []
-            feature_order = []
-            if model_type == "cpx_liq":
-                feature_order.extend([f"cpx:{oxide.replace('_cpx', '')}" for oxide in CPX_OXIDES if oxide in set(scope["oxide"])])
-                feature_order.extend([f"liq:{oxide.replace('_liq', '')}" for oxide in LIQ_OXIDES if oxide in set(scope["oxide"])])
-            else:
-                feature_order.extend([f"cpx:{oxide.replace('_cpx', '')}" for oxide in CPX_OXIDES if oxide in set(scope["oxide"])])
-
-            for target_type in ["P", "T"]:
-                target_scope = scope[scope["target_type"].eq(target_type)].copy()
-                model_order = list(dict.fromkeys(target_scope["model"].dropna().astype(str)))
-                if not model_order:
-                    matrices.append(None)
-                    continue
-                target = data[data["target_type"].eq(target_type)].copy()
-                if target.empty:
-                    matrix = pd.DataFrame(index=feature_order, columns=model_order, dtype=float)
-                    matrices.append(matrix)
-                    continue
-                target["feature"] = np.where(
-                    target["phase"].eq("cpx"),
-                    "cpx:" + target["oxide"].str.replace("_cpx", "", regex=False),
-                    "liq:" + target["oxide"].str.replace("_liq", "", regex=False),
-                )
-                signed = target.groupby(["feature", "model"])["signed_effect"].median().reset_index()
-                matrix = signed.pivot(index="feature", columns="model", values="signed_effect")
-                matrix = matrix.reindex(index=feature_order, columns=model_order)
+            target = data[data["target_type"].eq(target_type)].copy()
+            if target.empty:
+                matrix = pd.DataFrame(index=feature_order, columns=model_order, dtype=float)
                 matrices.append(matrix)
-
-            finite_values = []
-            for matrix in matrices:
-                if matrix is not None and not matrix.empty:
-                    finite_values.append(matrix.to_numpy(dtype=float).ravel())
-            if not finite_values:
                 continue
-            finite = np.concatenate(finite_values)
-            finite = finite[np.isfinite(finite)]
-            vmax = np.nanpercentile(np.abs(finite), 95) if len(finite) else 1.0
-            if not np.isfinite(vmax) or vmax == 0:
-                vmax = np.nanmax(np.abs(finite)) if len(finite) else 1.0
-            if not np.isfinite(vmax) or vmax == 0:
-                vmax = 1.0
-
-            p_matrix, t_matrix = matrices
-            max_rows = max((len(matrix.index) for matrix in matrices if matrix is not None and not matrix.empty), default=1)
-            p_cols = 0 if p_matrix is None or p_matrix.empty else len(p_matrix.columns)
-            t_cols = 0 if t_matrix is None or t_matrix.empty else len(t_matrix.columns)
-            cell_w = layout["cell_w"]
-            cell_h = layout["cell_h"]
-            label_w = layout["feature_label_w"]
-            panel_gap = 46
-            margin_x = 28
-            title_h = 78
-            bottom_h = 42
-            colorbar_w = 106
-            width = margin_x * 2 + label_w + cell_w * p_cols + panel_gap + cell_w * t_cols + colorbar_w
-            height = title_h + layout["header_h"] + cell_h * max_rows + bottom_h
-
-            image = Image.new("RGB", (max(width, 900), max(height, 520)), (252, 252, 253))
-            draw = ImageDraw.Draw(image)
-            perturbation_label = "cpx/liquid" if model_type == "cpx_liq" else "cpx"
-            rel_text = "1%" if rel_label == "1pct" else "2%"
-            title = f"Directional OAT effects, {model_type.replace('_', '-')} models"
-            subtitle = (
-                f"+{rel_text} relative perturbation applied to {perturbation_label}; "
-                "cells show median(perturbed prediction - baseline)."
+            target["feature"] = target.apply(
+                lambda row: f"{row['phase']}:{oxide_base_name(row['oxide'], row['phase'])}",
+                axis=1,
             )
-            draw.text((margin_x, 16), title, font=fonts["title"], fill=(31, 36, 48))
-            draw.text((margin_x, 45), subtitle, font=fonts["subtitle"], fill=(111, 118, 138))
+            signed = target.groupby(["feature", "model"])["signed_effect"].median().reset_index()
+            matrix = signed.pivot(index="feature", columns="model", values="signed_effect")
+            matrix = matrix.reindex(index=feature_order, columns=model_order)
+            matrices.append(matrix)
 
-            y0 = title_h
-            p_x0 = margin_x
-            _, grid_y, p_right, grid_bottom = _draw_directional_panel(
-                draw,
-                p_matrix,
-                x0=p_x0,
-                y0=y0,
-                panel_title="P prediction",
-                show_feature_labels=True,
-                vmax=vmax,
-                fonts=fonts,
-                layout=layout,
-            )
-            t_x0 = p_right + panel_gap
-            _, _, t_right, _ = _draw_directional_panel(
-                draw,
-                t_matrix,
-                x0=t_x0,
-                y0=y0,
-                panel_title="T prediction",
-                show_feature_labels=False,
-                vmax=vmax,
-                fonts=fonts,
-                layout=layout,
-            )
-            _draw_directional_colorbar(
-                draw,
-                x=t_right + 28,
-                y=grid_y,
-                height=max(40, grid_bottom - grid_y),
-                vmax=vmax,
-                fonts=fonts,
-            )
+        finite_values = []
+        for matrix in matrices:
+            if matrix is not None and not matrix.empty:
+                finite_values.append(matrix.to_numpy(dtype=float).ravel())
+        if not finite_values:
+            continue
+        finite = np.concatenate(finite_values)
+        finite = finite[np.isfinite(finite)]
+        vmax = np.nanpercentile(np.abs(finite), 95) if len(finite) else 1.0
+        if not np.isfinite(vmax) or vmax == 0:
+            vmax = np.nanmax(np.abs(finite)) if len(finite) else 1.0
+        if not np.isfinite(vmax) or vmax == 0:
+            vmax = 1.0
 
-            filename = f"test_subset_directional_equal_effect_{model_type}_{rel_label}.png"
-            image.save(fig_dir / filename, dpi=(300, 300))
-            count += 1
+        p_matrix, t_matrix = matrices
+        max_rows = max((len(matrix.index) for matrix in matrices if matrix is not None and not matrix.empty), default=1)
+        p_cols = 0 if p_matrix is None or p_matrix.empty else len(p_matrix.columns)
+        t_cols = 0 if t_matrix is None or t_matrix.empty else len(t_matrix.columns)
+        cell_w = layout["cell_w"]
+        cell_h = layout["cell_h"]
+        label_w = layout["feature_label_w"]
+        panel_gap = 46
+        margin_x = 28
+        title_h = 78
+        bottom_h = 42
+        colorbar_w = 106
+        width = margin_x * 2 + label_w + cell_w * p_cols + panel_gap + cell_w * t_cols + colorbar_w
+        height = title_h + layout["header_h"] + cell_h * max_rows + bottom_h
+
+        image = Image.new("RGB", (max(width, 900), max(height, 520)), (252, 252, 253))
+        draw = ImageDraw.Draw(image)
+        title = f"Directional OAT effects, {model_type.replace('_', '-')} models"
+        subtitle = "Oxide-specific +/-sigma central difference; cells show median((plus prediction - minus prediction) / 2)."
+        draw.text((margin_x, 16), title, font=fonts["title"], fill=(31, 36, 48))
+        draw.text((margin_x, 45), subtitle, font=fonts["subtitle"], fill=(111, 118, 138))
+
+        y0 = title_h
+        p_x0 = margin_x
+        _, grid_y, p_right, grid_bottom = _draw_directional_panel(
+            draw,
+            p_matrix,
+            x0=p_x0,
+            y0=y0,
+            panel_title="P prediction",
+            show_feature_labels=True,
+            vmax=vmax,
+            fonts=fonts,
+            layout=layout,
+        )
+        t_x0 = p_right + panel_gap
+        _, _, t_right, _ = _draw_directional_panel(
+            draw,
+            t_matrix,
+            x0=t_x0,
+            y0=y0,
+            panel_title="T prediction",
+            show_feature_labels=False,
+            vmax=vmax,
+            fonts=fonts,
+            layout=layout,
+        )
+        _draw_directional_colorbar(
+            draw,
+            x=t_right + 28,
+            y=grid_y,
+            height=max(40, grid_bottom - grid_y),
+            vmax=vmax,
+            fonts=fonts,
+        )
+
+        filename = f"test_subset_directional_pm_effect_{model_type}.png"
+        image.save(fig_dir / filename, dpi=(300, 300))
+        count += 1
     return count
 
 
@@ -2144,7 +3271,10 @@ def _draw_rotated_text(
 
 
 def _phase_oxide_order(phase: str, available: set[str]) -> list[str]:
-    """Return alphabetically ordered oxide labels for a phase."""
+    """Return the configured directional oxide order for a phase."""
+    ordered = directional_display_oxide_order(phase, available)
+    if ordered:
+        return ordered
     oxides = CPX_OXIDES if phase == "cpx" else LIQ_OXIDES
     return sorted([oxide for oxide in oxides if oxide in available])
 
@@ -2153,14 +3283,12 @@ def _abs_effect_matrix(
     long_df: pd.DataFrame,
     *,
     model_type: str,
-    rel_error: float,
     target_type: str,
     phase: str,
 ) -> pd.DataFrame | None:
     """Build a model-by-oxide matrix of median absolute effects."""
     scope = long_df[
         long_df["model_type"].eq(model_type)
-        & long_df["rel_error"].eq(rel_error)
         & long_df["target_type"].eq(target_type)
         & long_df["phase"].eq(phase)
     ].copy()
@@ -2210,6 +3338,30 @@ def _draw_abs_colorbar(
     _draw_rotated_text(image, label, (x + bar_w + 54, y + max(0, (height - 260) // 2)), fonts["axis"], ink, angle=90)
 
 
+def _wrap_title_lines(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    font: ImageFont.ImageFont,
+    max_width: int,
+) -> list[str]:
+    """Wrap a panel title to fit the available width."""
+    words = str(text).split()
+    if not words:
+        return []
+    lines: list[str] = []
+    current = words[0]
+    for word in words[1:]:
+        candidate = f"{current} {word}"
+        width, _ = _text_size(draw, candidate, font)
+        if width <= max_width:
+            current = candidate
+        else:
+            lines.append(current)
+            current = word
+    lines.append(current)
+    return lines
+
+
 def _make_abs_heatmap_panel(
     matrix: pd.DataFrame | None,
     *,
@@ -2222,16 +3374,17 @@ def _make_abs_heatmap_panel(
     cell_w = 52
     cell_h = 44
     left_w = 122
-    top_h = 60
+    has_title = bool(str(title).strip())
+    top_h = 106 if has_title else 40
     x_label_h = 126
     right_w = 150
     bottom_h = 8
-    min_cols = 14
+    min_cols = 10
     rows = 1 if matrix is None or matrix.empty else len(matrix.index)
     cols = min_cols if matrix is None or matrix.empty else max(min_cols, len(matrix.columns))
     grid_w = cols * cell_w
     grid_h = rows * cell_h
-    width = left_w + grid_w + right_w
+    width = max(left_w + grid_w + right_w, 760)
     height = top_h + grid_h + x_label_h + bottom_h
 
     image = Image.new("RGB", (width, height), (255, 255, 255))
@@ -2241,10 +3394,18 @@ def _make_abs_heatmap_panel(
     axis = (110, 110, 110)
 
     draw.text((6, 6), panel_letter, font=fonts["letter"], fill=ink)
-    tw, _ = _text_size(draw, title, fonts["title"])
-    draw.text((left_w + max(0, (grid_w - tw) // 2), 10), title, font=fonts["title"], fill=ink)
+    if has_title:
+        title_lines = _wrap_title_lines(draw, title, fonts["title"], width - 88)
+        _, line_h = _text_size(draw, "Ag", fonts["title"])
+        y_title = 8
+        for line in title_lines[:3]:
+            tw, _ = _text_size(draw, line, fonts["title"])
+            draw.text((max(42, (width - tw) // 2), y_title), line, font=fonts["title"], fill=ink)
+            y_title += line_h + 2
 
-    grid_x = left_w
+    draw_cols = cols if matrix is None or matrix.empty else len(matrix.columns)
+    content_w = left_w + draw_cols * cell_w + right_w
+    grid_x = max(0, (width - content_w) // 2) + left_w
     grid_y = top_h
     if matrix is None or matrix.empty:
         draw.rectangle((grid_x, grid_y, grid_x + grid_w, grid_y + grid_h), fill=(238, 238, 238), outline=axis)
@@ -2303,6 +3464,179 @@ def _make_abs_heatmap_panel(
     return image
 
 
+def _all_oxide_column_specs(model_type: str) -> list[tuple[str, float, str]]:
+    """Return display columns for simultaneous all-oxide perturbations."""
+    specs = [
+        ("all_cpx_oxides", 0.010, "cpx 1%"),
+        ("all_cpx_oxides", 0.020, "cpx 2%"),
+    ]
+    if model_type == "cpx_liq":
+        specs = [
+            ("all_cpx_oxides", 0.010, "cpx 1%"),
+            ("all_liq_oxides", 0.010, "liq 1%"),
+            ("all_cpx_liq_oxides", 0.010, "cpx+liq 1%"),
+            ("all_cpx_oxides", 0.020, "cpx 2%"),
+            ("all_liq_oxides", 0.020, "liq 2%"),
+            ("all_cpx_liq_oxides", 0.020, "cpx+liq 2%"),
+        ]
+    return specs
+
+
+def _all_oxide_effect_matrix(long_df: pd.DataFrame, *, model_type: str, target_type: str) -> pd.DataFrame | None:
+    """Build a model-by-all-oxide-group matrix of median absolute effects."""
+    scope = long_df[long_df["model_type"].eq(model_type) & long_df["target_type"].eq(target_type)].copy()
+    if scope.empty:
+        return None
+    model_order = sorted(scope["model"].dropna().astype(str).unique())
+    column_specs = _all_oxide_column_specs(model_type)
+    column_keys = [f"{oxide}|{rel_error:.3f}" for oxide, rel_error, _ in column_specs]
+    column_labels = [label for _, _, label in column_specs]
+
+    ok = scope[scope["status"].eq("ok")].copy()
+    if ok.empty:
+        return pd.DataFrame(index=model_order, columns=column_labels, dtype=float)
+
+    ok["column_key"] = ok["oxide"].astype(str) + "|" + ok["rel_error"].astype(float).map(lambda value: f"{value:.3f}")
+    values = ok.groupby(["model", "column_key"])["abs_effect"].median().reset_index()
+    matrix = values.pivot(index="model", columns="column_key", values="abs_effect")
+    matrix = matrix.reindex(index=model_order, columns=column_keys)
+    matrix.columns = column_labels
+    return matrix
+
+
+def _make_all_oxide_abs_panel(
+    matrix: pd.DataFrame | None,
+    *,
+    title: str,
+    panel_letter: str,
+    unit: str,
+    fonts: dict[str, ImageFont.ImageFont],
+) -> Image.Image:
+    """Render one all-oxide absolute-effect heatmap panel."""
+    cell_w = 104
+    cell_h = 44
+    left_w = 118
+    top_h = 62
+    x_label_h = 44
+    right_w = 150
+    bottom_h = 8
+    min_cols = 2
+    rows = 1 if matrix is None or matrix.empty else len(matrix.index)
+    cols = min_cols if matrix is None or matrix.empty else max(min_cols, len(matrix.columns))
+    grid_w = cols * cell_w
+    grid_h = rows * cell_h
+    width = max(left_w + grid_w + right_w, 900)
+    height = top_h + grid_h + x_label_h + bottom_h
+
+    image = Image.new("RGB", (width, height), (255, 255, 255))
+    draw = ImageDraw.Draw(image)
+    ink = (20, 20, 20)
+    muted = (90, 90, 90)
+    axis = (110, 110, 110)
+
+    draw.text((6, 6), panel_letter, font=fonts["letter"], fill=ink)
+    tw, _ = _text_size(draw, title, fonts["title"])
+    draw.text((max(42, (width - tw) // 2), 10), title, font=fonts["title"], fill=ink)
+
+    draw_cols = cols if matrix is None or matrix.empty else len(matrix.columns)
+    content_w = left_w + draw_cols * cell_w + right_w
+    grid_x = max(0, (width - content_w) // 2) + left_w
+    grid_y = top_h
+    if matrix is None or matrix.empty:
+        draw.rectangle((grid_x, grid_y, grid_x + grid_w, grid_y + grid_h), fill=(238, 238, 238), outline=axis)
+        draw.text((grid_x + 12, grid_y + 10), "No available results", font=fonts["tick"], fill=muted)
+        _draw_abs_colorbar(
+            image,
+            draw,
+            x=grid_x + grid_w + 34,
+            y=grid_y,
+            height=grid_h,
+            vmin=0.0,
+            vmax=1.0,
+            unit=unit,
+            fonts=fonts,
+        )
+        return image
+
+    values = matrix.to_numpy(dtype=float)
+    finite = values[np.isfinite(values)]
+    vmin = float(np.nanmin(finite)) if len(finite) else 0.0
+    vmax = float(np.nanmax(finite)) if len(finite) else 1.0
+
+    for r, model in enumerate(matrix.index):
+        label = str(model)
+        lw, lh = _text_size(draw, label, fonts["model"])
+        y = grid_y + r * cell_h + max(0, (cell_h - lh) // 2)
+        draw.text((grid_x - lw - 8, y), label, font=fonts["model"], fill=ink)
+        for c in range(len(matrix.columns)):
+            value = values[r, c]
+            x = grid_x + c * cell_w
+            y0 = grid_y + r * cell_h
+            draw.rectangle(
+                (x, y0, x + cell_w - 1, y0 + cell_h - 1),
+                fill=_abs_effect_rgb(value, vmin, vmax),
+                outline=(255, 255, 255),
+            )
+
+    for c, label in enumerate(matrix.columns):
+        tw, th = _text_size(draw, str(label), fonts["feature"])
+        x = grid_x + c * cell_w + max(0, (cell_w - tw) // 2)
+        y = grid_y + grid_h + 8
+        draw.text((x, y), str(label), font=fonts["feature"], fill=ink)
+
+    draw.rectangle((grid_x, grid_y, grid_x + len(matrix.columns) * cell_w, grid_y + grid_h), outline=axis, width=1)
+    _draw_abs_colorbar(
+        image,
+        draw,
+        x=grid_x + len(matrix.columns) * cell_w + 34,
+        y=grid_y,
+        height=grid_h,
+        vmin=vmin,
+        vmax=vmax,
+        unit=unit,
+        fonts=fonts,
+    )
+    return image
+
+
+def plot_directional_all_oxides_figures(long_df: pd.DataFrame, fig_dir: Path) -> int:
+    """Plot simultaneous all-oxide perturbation effects."""
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    for old_png in fig_dir.glob("test_subset_directional_all_oxides_abs_composite*.png"):
+        old_png.unlink()
+
+    fonts = {
+        "letter": _pil_font(30, bold=True),
+        "title": _pil_font(29),
+        "axis": _pil_font(22),
+        "model": _pil_font(22),
+        "feature": _pil_font(20),
+        "tick": _pil_font(20),
+    }
+    panel_specs = [
+        ("cpx_liq", "P", "All-oxide sensitivity: cpx-liq P", "kbar"),
+        ("cpx_liq", "T", "All-oxide sensitivity: cpx-liq T", "deg C"),
+        ("cpx_only", "P", "All-oxide sensitivity: cpx-only P", "kbar"),
+        ("cpx_only", "T", "All-oxide sensitivity: cpx-only T", "deg C"),
+    ]
+    panels: list[Image.Image] = []
+    for panel_letter, (model_type, target_type, title, unit) in zip("abcd", panel_specs):
+        matrix = _all_oxide_effect_matrix(long_df, model_type=model_type, target_type=target_type)
+        panels.append(
+            _make_all_oxide_abs_panel(
+                matrix,
+                title=title,
+                panel_letter=panel_letter,
+                unit=unit,
+                fonts=fonts,
+            )
+        )
+
+    composite = _compose_panel_grid(panels, columns=2, gap_x=18, gap_y=22)
+    composite.save(fig_dir / "test_subset_directional_all_oxides_abs_composite.png", dpi=(300, 300))
+    return 1
+
+
 def _compose_panel_grid(panels: list[Image.Image], *, columns: int, gap_x: int = 18, gap_y: int = 20) -> Image.Image:
     """Combine rendered panels into a single figure."""
     rows = int(math.ceil(len(panels) / columns))
@@ -2335,6 +3669,8 @@ def plot_directional_equal_abs_composites(long_df: pd.DataFrame, fig_dir: Path) 
     """Plot composite absolute-effect heatmaps by target and phase."""
     for old_png in fig_dir.glob("test_subset_directional_equal_abs_composite_*.png"):
         old_png.unlink()
+    for old_png in fig_dir.glob("test_subset_directional_pm_abs_composite_*.png"):
+        old_png.unlink()
 
     fonts = {
         "letter": _pil_font(30, bold=True),
@@ -2347,49 +3683,48 @@ def plot_directional_equal_abs_composites(long_df: pd.DataFrame, fig_dir: Path) 
     panel_letters = list("abcd")
     count = 0
     for model_type in ["cpx_liq", "cpx_only"]:
-        for rel_error, rel_label in [(0.010, "1pct"), (0.020, "2pct")]:
-            rel_text = "1pct" if rel_label == "1pct" else "2pct"
+        panel_specs = [
+            ("P", "cpx", "Pressure", "kbar"),
+            ("P", "liq", "Pressure", "kbar"),
+            ("T", "cpx", "Temperature", "deg C"),
+            ("T", "liq", "Temperature", "deg C"),
+        ]
+        if model_type == "cpx_only":
             panel_specs = [
                 ("P", "cpx", "Pressure", "kbar"),
-                ("P", "liq", "Pressure", "kbar"),
                 ("T", "cpx", "Temperature", "deg C"),
-                ("T", "liq", "Temperature", "deg C"),
             ]
-            if model_type == "cpx_only":
-                panel_specs = [
-                    ("P", "cpx", "Pressure", "kbar"),
-                    ("T", "cpx", "Temperature", "deg C"),
-                ]
 
-            panels = []
-            for idx, (target_type, phase, target_label, unit) in enumerate(panel_specs):
-                matrix = _abs_effect_matrix(
-                    long_df,
-                    model_type=model_type,
-                    rel_error=rel_error,
-                    target_type=target_type,
-                    phase=phase,
-                )
-                if matrix is None:
-                    continue
-                title = f"{target_label} sensitivity: {phase}_{rel_text}"
-                panels.append(
-                    _make_abs_heatmap_panel(
-                        matrix,
-                        title=title,
-                        panel_letter=panel_letters[idx],
-                        unit=unit,
-                        fonts=fonts,
-                    )
-                )
-
-            if not panels:
+        panels = []
+        for idx, (target_type, phase, target_label, unit) in enumerate(panel_specs):
+            matrix = _abs_effect_matrix(
+                long_df,
+                model_type=model_type,
+                target_type=target_type,
+                phase=phase,
+            )
+            if matrix is None:
                 continue
-            columns = 2 if len(panels) > 1 else 1
-            composite = _compose_panel_grid(panels, columns=columns)
-            filename = f"test_subset_directional_equal_abs_composite_{model_type}_{rel_label}.png"
-            composite.save(fig_dir / filename, dpi=(300, 300))
-            count += 1
+            phase_label = "Clinopyroxene" if phase == "cpx" else "Liquid"
+            target_label_full = "Barometry" if target_type == "P" else "Thermometry"
+            title = f"Effect of Analytical Uncertainty in {phase_label} Compositions on {target_label_full}"
+            panels.append(
+                _make_abs_heatmap_panel(
+                    matrix,
+                    title=title,
+                    panel_letter=panel_letters[idx],
+                    unit=unit,
+                    fonts=fonts,
+                )
+            )
+
+        if not panels:
+            continue
+        columns = 2 if len(panels) > 1 else 1
+        composite = _compose_panel_grid(panels, columns=columns)
+        filename = f"test_subset_directional_pm_abs_composite_{model_type}.png"
+        composite.save(fig_dir / filename, dpi=(300, 300))
+        count += 1
     return count
 
 
@@ -2477,14 +3812,15 @@ This folder contains uncertainty and sensitivity outputs generated from only the
 - Retained test-subset rows: {qc.get('testing_rows')}.
 - Total input rows: {qc.get('total_rows')}; training rows: {qc.get('training_rows')}.
 - Core baseline/Kd/analytical OAT models: cpx-liquid thermobarometers only; cpx-only models were excluded from those core outputs.
-- Directional equal-error OAT extension: cpx-liquid and cpx-only model groups are plotted separately at matched 1% and 2% positive perturbations.
+- Directional OAT extension: cpx-liquid and cpx-only model groups are plotted separately using oxide-specific analytical uncertainties and central plus/minus differences.
+- Framework-level directional extension: cpx-liquid and cpx-only AIMS4PT final recommendations are tested separately using the same oxide-specific central plus/minus perturbations.
 - Pairing: fixed experimental cpx-liquid pairs were used; liquids were not re-paired.
 - Kd analysis: association between observed Kd(Fe-Mg) and model predictions/residuals, not a re-pairing experiment.
 - Analytical perturbations: cpx oxides at 0.5% and 1%; liquid oxides at 1%, 2%, and 3%.
 - Perturbation method: deterministic one-at-a-time plus/minus relative perturbations; no Monte Carlo.
-- Cpx QC: perturbed cpx compositions must pass 98-102 wt.% total and 0.9-1.1 stoichiometric ratio before model calculation.
+- Cpx QC: perturbed cpx compositions must pass 97-103 wt.% total and 0.9-1.1 stoichiometric ratio before model calculation.
 - Liquid QC: perturbed liquid compositions must pass the liquid total upper-bound check of <=105 wt.% before model calculation.
-- H2O handling: H2O columns were kept fixed and were not perturbed.
+- H2O handling: H2O_liq is included only in liquid directional panels using an absolute +/-3 wt.% perturbation.
 - Baseline reuse: {source_text}
 """
     (output_dir / "README_test_subset.md").write_text(text, encoding="utf-8")
@@ -2523,8 +3859,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--experiments",
         nargs="+",
-        default=["baseline", "kd", "analytical_oat", "directional_equal_oat"],
-        choices=["baseline", "kd", "analytical_oat", "directional_equal_oat", "directional_repair"],
+        default=["baseline", "kd", "analytical_oat", "directional_equal_oat", "framework_directional_oat"],
+        choices=[
+            "baseline",
+            "kd",
+            "analytical_oat",
+            "directional_equal_oat",
+            "directional_all_oxides",
+            "framework_directional_oat",
+            "directional_repair",
+        ],
     )
     parser.add_argument(
         "--directional-model-type",
@@ -2586,9 +3930,18 @@ def main() -> None:
 
     directional_rows = 0
     directional_figures = 0
+    directional_all_rows = 0
+    framework_rows = 0
+    framework_figures = 0
     if "directional_equal_oat" in args.experiments:
         directional_df, directional_figures = run_directional_equal_error_analysis(test_df, paths, args.reuse_existing)
         directional_rows = int(len(directional_df))
+    if "directional_all_oxides" in args.experiments:
+        directional_all_df = run_directional_all_oxides_analysis(test_df, paths, args.reuse_existing)
+        directional_all_rows = int(len(directional_all_df))
+    if "framework_directional_oat" in args.experiments:
+        framework_df, framework_figures = run_framework_directional_analysis(test_df, paths, args.reuse_existing)
+        framework_rows = int(len(framework_df))
     if "directional_repair" in args.experiments:
         directional_df, directional_figures = repair_directional_equal_error_analysis(
             test_df,
@@ -2602,7 +3955,11 @@ def main() -> None:
     if needs_core_baseline or not (output_dir / "README_test_subset.md").exists():
         write_readme(output_dir, baseline_source, qc)
     missing_figs = verify_outputs(paths)
-    figure_count = len(list(paths["kd_fig"].glob("*.png"))) + len(list(paths["analytical_fig"].glob("*.png")))
+    figure_count = (
+        len(list(paths["kd_fig"].glob("*.png")))
+        + len(list(paths["analytical_fig"].glob("*.png")))
+        + len(list(paths["framework_fig"].glob("*.png")))
+    )
     failed_calcs = int((baseline["status"] != "ok").sum())
     if "analytical_oat" in args.experiments:
         failed_calcs += int((long_df["status"] == "calculation_failed").sum())
@@ -2624,6 +3981,8 @@ def main() -> None:
     print(f"11. Failed calculations recorded in output tables: {failed_calcs}")
     print(f"Generated figure count: {figure_count} (analytical figures this run/reuse: {analytical_figures})")
     print(f"Directional equal-error OAT rows: {directional_rows}; figures: {directional_figures}")
+    print(f"Directional all-oxide OAT rows: {directional_all_rows}")
+    print(f"Framework final-result OAT rows: {framework_rows}; figures: {framework_figures}")
     print(f"Output directory: {output_dir}")
 
 
