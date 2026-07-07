@@ -10,6 +10,7 @@ import pandas as pd
 
 from paper.scripts.constants_illustration import get_model_abbreviation
 from paper.scripts.merapi_helpers import (
+    _clean_str,
     _convert_depth_range_to_pressure_range,
     _eruption_color,
     _eruption_slot_offset,
@@ -22,53 +23,22 @@ from paper.scripts.merapi_helpers import (
 )
 
 
-TABLE1_TEST_RMSE = {
-    ("P", "cpx_only", "Pu08_32a"): 3.89,
-    ("P", "cpx_only", "Pu08_32b"): 3.95,
-    ("P", "cpx_only", "Pet20"): 3.77,
-    ("P", "cpx_only", "Wan21"): 4.06,
-    ("P", "cpx_only", "Hig21"): 4.23,
-    ("P", "cpx_only", "Jor22"): 3.68,
-    ("P", "cpx_only", "Chi23"): 4.67,
-    ("P", "cpx_only", "AgL24"): 4.37,
-    ("P", "cpx_liq", "Pu08_31"): 3.57,
-    ("P", "cpx_liq", "NP17"): 4.51,
-    ("P", "cpx_liq", "Pet20"): 3.45,
-    ("P", "cpx_liq", "Jor22"): 2.96,
-    ("P", "cpx_liq", "Chi23"): 3.81,
-    ("P", "cpx_liq", "AgL24"): 3.00,
-    ("T", "cpx_only", "Pu08_32d"): 161.03,
-    ("T", "cpx_only", "Pet20"): 82.19,
-    ("T", "cpx_only", "Wan21"): 128.45,
-    ("T", "cpx_only", "Hig21"): 69.84,
-    ("T", "cpx_only", "Jor22"): 94.22,
-    ("T", "cpx_only", "Chi23"): 105.68,
-    ("T", "cpx_only", "AgL24"): 84.10,
-    ("T", "cpx_liq", "Pu08_33"): 81.78,
-    ("T", "cpx_liq", "Pet20"): 82.54,
-    ("T", "cpx_liq", "Jor22"): 55.11,
-    ("T", "cpx_liq", "Chi23"): 59.77,
-    ("T", "cpx_liq", "AgL24"): 53.74,
-}
-
-
-AIMS4PT_WORKFLOW_RMSE = {
-    ("P", "cpx_only"): 1.532396,
-    ("P", "cpx_liq"): 1.684102,
-    ("T", "cpx_only"): 58.375700,
-    ("T", "cpx_liq"): 40.873331,
-}
-
-
-FIG9_RECOMMENDED_MODEL_ABBREVIATIONS = {
+FIG9_FINAL_RESULT_SELECTION = {
     ("P", "cpx_only", "2006"): "Jor22",
     ("P", "cpx_only", "2010"): "Pet20",
     ("T", "cpx_only", "2006"): "Hig21",
-    ("T", "cpx_only", "2010"): "AgL24",
-    ("P", "cpx_liq", "2006"): "Pet20",
+    ("T", "cpx_only", "2010"): "overall",
+    ("P", "cpx_liq", "2006"): "overall",
     ("P", "cpx_liq", "2010"): "Pet20",
     ("T", "cpx_liq", "2006"): "Chi23",
     ("T", "cpx_liq", "2010"): "AgL24",
+}
+
+AIMS4PT_WORKFLOW_RMSE = {
+    ("P", "cpx_only"): 1.52,
+    ("P", "cpx_liq"): 1.67,
+    ("T", "cpx_only"): 60,
+    ("T", "cpx_liq"): 41,
 }
 
 
@@ -81,17 +51,12 @@ def _finite_array(values: Sequence[float]) -> np.ndarray:
     return arr[np.isfinite(arr)]
 
 
-def _table1_test_rmse(kind: str, phase_type: str, model_name: str) -> float:
-    abbreviation = get_model_abbreviation(model_name, kind)
-    return TABLE1_TEST_RMSE.get((kind, phase_type, abbreviation), np.nan)
-
-
-def _fig9_recommended_model_name(kind: str, phase_type: str, year: str, df_pred: pd.DataFrame) -> str:
-    target_abbrev = FIG9_RECOMMENDED_MODEL_ABBREVIATIONS[(kind, phase_type, year)]
+def _fig9_final_result_model_name(kind: str, phase_type: str, year: str, df_pred: pd.DataFrame) -> str:
+    target_abbrev = FIG9_FINAL_RESULT_SELECTION[(kind, phase_type, year)]
     for model_name in df_pred.columns:
         if get_model_abbreviation(model_name, kind) == target_abbrev:
             return str(model_name)
-    raise KeyError(f"Missing Fig. 9 recommended model {target_abbrev} for {kind} {phase_type} {year}.")
+    raise KeyError(f"Missing Fig. 9 final-result model {target_abbrev} for {kind} {phase_type} {year}.")
 
 
 def _build_fig9_threshold_columns(
@@ -108,34 +73,39 @@ def _build_fig9_threshold_columns(
             best_models = kind_state["best_models"][year][phase_type]
             rank_pcts = kind_state["ranks"][year][phase_type]
             fill = "blue" if year == "2006" else "red"
-            target_abbrev = FIG9_RECOMMENDED_MODEL_ABBREVIATIONS[(kind, phase_type, year)]
-            recommended_model = _fig9_recommended_model_name(kind, phase_type, year, df_pred)
-            recommended_pct = next(
-                (
-                    float(pct)
-                    for model_name, pct in rank_pcts
-                    if get_model_abbreviation(model_name, kind) == target_abbrev
-                ),
-                np.nan,
-            )
+            final_result = FIG9_FINAL_RESULT_SELECTION[(kind, phase_type, year)]
 
             overall_data = _remove_boxplot_outliers(
                 _selected_predictions_from_best_models(df_pred, best_models)
             )
-            columns.append(
-                {
-                    "category": "This study",
-                    "type": phase_type,
-                    "eruption": year,
-                    "model": "overall",
-                    "label": "Ov.",
-                    "data": overall_data,
-                    "fill": fill,
-                    "rmse": AIMS4PT_WORKFLOW_RMSE.get((kind, phase_type), np.nan),
-                    "rmse_source": "AIMS4PT workflow independent test RMSE",
-                    "is_overall": True,
-                    "plot_value_filter": "selected best-model values after Tukey filtering",
-                }
+            overall_uncertainty = AIMS4PT_WORKFLOW_RMSE.get((kind, phase_type), np.nan)
+            if final_result == "overall":
+                columns.append(
+                    {
+                        "category": "This study",
+                        "type": phase_type,
+                        "eruption": year,
+                        "model": "overall",
+                        "label": "Ov.",
+                        "data": overall_data,
+                        "fill": fill,
+                        "uncertainty": overall_uncertainty,
+                        "uncertainty_source": "AIMS4PT workflow RMSE",
+                        "is_overall": True,
+                        "final_result": "Overall distribution",
+                        "plot_value_filter": "selected best-model values after Tukey filtering",
+                    }
+                )
+                continue
+
+            recommended_model = _fig9_final_result_model_name(kind, phase_type, year, df_pred)
+            recommended_pct = next(
+                (
+                    float(pct)
+                    for model_name, pct in rank_pcts
+                    if get_model_abbreviation(model_name, kind) == final_result
+                ),
+                np.nan,
             )
 
             model_data = pd.to_numeric(df_pred[recommended_model], errors="coerce").replace(
@@ -158,94 +128,57 @@ def _build_fig9_threshold_columns(
                     "favored_data": favored_data,
                     "pct": recommended_pct,
                     "fill": fill,
-                    "rmse": _table1_test_rmse(kind, phase_type, recommended_model),
-                    "rmse_source": "Table 1 independent test RMSE",
+                    "uncertainty": kind_state["uncertainty"].get(recommended_model, np.nan),
+                    "uncertainty_source": "model.uncertainty",
                     "is_overall": False,
+                    "final_result": final_result,
                     "plot_value_filter": "all finite model predictions",
                 }
             )
     return columns
 
 
-def _fig9_published_mineral_thermobarometry_methods(kind: str) -> list[dict[str, Any]]:
-    if kind != "P":
-        return []
-    return [
-        {
-            "category": "Mineral thermobarometry",
-            "type": "cpx-liq",
-            "type_label": "cpx-liq",
-            "label": "Pre14",
-            "thermobatometer": "cpx-liq",
-            "eruptions": [
-                {
-                    "eruption": "2006",
-                    "ranges": [(1.0, 5.1)],
-                    "uncertainty": np.nan,
-                    "range_uncertainties": [np.nan],
-                    "notes": "Preece et al. (2014)",
-                },
-                {
-                    "eruption": "2010",
-                    "ranges": [(0.8, 5.1)],
-                    "uncertainty": np.nan,
-                    "range_uncertainties": [np.nan],
-                    "notes": "Preece et al. (2014)",
-                },
-            ],
-        },
-        {
-            "category": "Mineral thermobarometry",
-            "type": "amph-only",
-            "type_label": "amph-only",
-            "label": "Cos13",
-            "thermobatometer": "amph-only",
-            "eruptions": [
-                {
-                    "eruption": "2006&2010",
-                    "ranges": [(3.0, 5.4), (7.0, 9.0)],
-                    "uncertainty": np.nan,
-                    "range_uncertainties": [np.nan],
-                    "notes": "Costa et al. (2013)",
-                },
-            ],
-        },
-        {
-            "category": "Mineral thermobarometry",
-            "type": "amph-liq",
-            "type_label": "amph-liq",
-            "label": "Li21",
-            "thermobatometer": "amph-liq",
-            "eruptions": [
-                {
-                    "eruption": "2006",
-                    "ranges": [(5.6, 5.9)],
-                    "uncertainty": np.nan,
-                    "range_uncertainties": [np.nan],
-                    "notes": "Li et al. (2021)",
-                },
-                {
-                    "eruption": "2010",
-                    "ranges": [(5.8, 7.2), (8.4, 8.5)],
-                    "uncertainty": np.nan,
-                    "range_uncertainties": [np.nan],
-                    "notes": "Li et al. (2021)",
-                },
-            ],
-        },
-    ]
-
-
-def _rmse_band(values: Sequence[float], rmse: Any) -> tuple[float, float, float]:
+def _uncertainty_band(values: Sequence[float], uncertainty: Any) -> tuple[float, float, float]:
     values_arr = _finite_array(values)
     try:
-        rmse_float = float(rmse)
+        uncertainty_float = float(uncertainty)
     except Exception:
         return np.nan, np.nan, np.nan
-    if values_arr.size == 0 or not np.isfinite(rmse_float) or rmse_float <= 0:
+    if values_arr.size == 0 or not np.isfinite(uncertainty_float) or uncertainty_float <= 0:
         return np.nan, np.nan, np.nan
     median = float(np.nanmedian(values_arr))
-    return median, median - rmse_float, median + rmse_float
+    return median, median - uncertainty_float, median + uncertainty_float
+
+
+def _prepare_fig9_v2_literature_methods(lit_methods: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Merge same-column literature methods, then place mineral thermobarometry first."""
+    merged: list[dict[str, Any]] = []
+    index_by_key: dict[tuple[str, str, str, str], int] = {}
+    for method in lit_methods:
+        method_copy = dict(method)
+        method_copy["type_label"] = _clean_str(method_copy.get("type"))
+        key = (
+            _clean_str(method_copy.get("category")),
+            _clean_str(method_copy.get("type")),
+            _clean_str(method_copy.get("label")),
+            _clean_str(method_copy.get("thermobatometer")),
+        )
+        if key in index_by_key:
+            merged[index_by_key[key]]["eruptions"].extend(method_copy.get("eruptions", []))
+            continue
+        method_copy["eruptions"] = list(method_copy.get("eruptions", []))
+        index_by_key[key] = len(merged)
+        merged.append(method_copy)
+    return [
+        method
+        for _, method in sorted(
+            enumerate(merged),
+            key=lambda item: (
+                0 if _clean_str(item[1].get("category")) == "Mineral thermobarometry" else 1,
+                item[0],
+            ),
+        )
+    ]
 
 
 def _summary_stats(values: Sequence[float]) -> dict[str, Any]:
@@ -293,7 +226,7 @@ def _this_study_tables_for_kind(
 
     for plot_index, (col, x_center) in enumerate(zip(this_cols, this_x), start=1):
         values = _finite_array(col.get("data", []))
-        rmse_median, rmse_band_min, rmse_band_max = _rmse_band(values, col.get("rmse"))
+        band_median, band_min, band_max = _uncertainty_band(values, col.get("uncertainty"))
         model = str(col["model"])
         base = {
             "quantity": kind,
@@ -308,6 +241,7 @@ def _this_study_tables_for_kind(
             "model_abbreviation": "overall" if model == "overall" else get_model_abbreviation(model, kind),
             "label": col["label"],
             "is_overall": bool(col.get("is_overall", False)),
+            "final_result": col.get("final_result"),
             "selection_pct": col.get("pct", np.nan),
             "fill": col.get("fill"),
             "plot_value_filter": col.get("plot_value_filter"),
@@ -316,11 +250,11 @@ def _this_study_tables_for_kind(
             {
                 **base,
                 **_summary_stats(values),
-                "rmse": col.get("rmse", np.nan),
-                "rmse_source": col.get("rmse_source"),
-                "rmse_band_center": rmse_median,
-                "rmse_band_min": rmse_band_min,
-                "rmse_band_max": rmse_band_max,
+                "uncertainty": col.get("uncertainty", np.nan),
+                "uncertainty_source": col.get("uncertainty_source"),
+                "uncertainty_band_center": band_median,
+                "uncertainty_band_min": band_min,
+                "uncertainty_band_max": band_max,
             }
         )
         axis_rows.append(
@@ -366,7 +300,7 @@ def _literature_tables_for_kind(
         densities_kg_m3=densities_kg_m3,
         layer_boundaries_km=layer_boundaries_km,
     )
-    lit_methods = _fig9_published_mineral_thermobarometry_methods(kind) + lit_methods
+    lit_methods = _prepare_fig9_v2_literature_methods(lit_methods)
     lit_start = (this_x[-1] + 1.0) if this_x.size else 1.0
     x_lit = lit_start + np.arange(len(lit_methods), dtype=float)
 
@@ -522,15 +456,15 @@ def build_fig9_merapi_different_constraints_v2_data_tables(
         {"key": "literature_pressure_source", "value": literature_pressure_source},
         {
             "key": "this_study_values_note",
-            "value": "Values are the arrays passed to the Fig. 9 v2 violin plots.",
+            "value": "This study columns keep only the configured final result for each calculation group.",
         },
         {
             "key": "overall_values_note",
-            "value": "Overall columns use selected best-model predictions after Tukey-fence filtering.",
+            "value": "Overall final-result columns use selected best-model predictions after Tukey-fence filtering and AIMS4PT workflow RMSE.",
         },
         {
             "key": "model_values_note",
-            "value": "Representative-model columns use all finite predictions from the configured model.",
+            "value": "Model final-result columns use all finite predictions from the configured model.",
         },
     ]
 

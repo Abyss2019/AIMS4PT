@@ -1214,13 +1214,14 @@ def _draw_violin(
     bw_method: float = 0.25,
     zorder: float = 3,
     show_quartile_interval: bool = True,
+    show_median: bool = True,
 ) -> Mapping[str, Any]:
     vp = ax.violinplot(
         data_list,
         positions=positions,
         widths=widths,
         showmeans=False,
-        showmedians=True,
+        showmedians=show_median,
         showextrema=False,
         bw_method=bw_method,
     )
@@ -1231,7 +1232,7 @@ def _draw_violin(
         body.set_alpha(alpha)
         body.set_zorder(zorder)
 
-    if "cmedians" in vp:
+    if show_median and "cmedians" in vp:
         vp["cmedians"].set_color("k")
         vp["cmedians"].set_linewidth(max(lw * 1.35, 1.8))
         vp["cmedians"].set_alpha(1.0)
@@ -1315,6 +1316,143 @@ def _add_vertical_uncertainty_band_from_median(
         ax.scatter([float(x_center)], [float(median)], s=22, color=color, zorder=zorder + 0.3)
     else:
         ax.hlines(float(median), x0 + 0.28 * width, x1 - 0.28 * width, color=color, lw=1.4, zorder=zorder + 0.2)
+
+
+def _x_position_edges(x_positions: Sequence[float]) -> np.ndarray:
+    """Return plotting block edges from possibly non-uniform x centers."""
+    x_positions = np.asarray(x_positions, dtype=float)
+    block_edges = np.empty(x_positions.size + 1, dtype=float)
+    if x_positions.size == 0:
+        return block_edges
+    block_edges[0] = x_positions[0] - 0.5
+    block_edges[-1] = x_positions[-1] + 0.5
+    if x_positions.size > 1:
+        block_edges[1:-1] = 0.5 * (x_positions[:-1] + x_positions[1:])
+    return block_edges
+
+
+def _lookup_workflow_rmse(
+    rmse_by_kind_phase: Optional[Mapping[Any, Any]],
+    kind: str,
+    phase_type: str,
+) -> Optional[float]:
+    """Look up a workflow RMSE from tuple-keyed or nested mappings."""
+    if not rmse_by_kind_phase:
+        return None
+
+    kind_keys = (kind, kind.lower(), "pressure" if kind == "P" else "temperature")
+    phase_keys = (phase_type, phase_type.lower())
+    for kind_key in kind_keys:
+        for phase_key in phase_keys:
+            if (kind_key, phase_key) in rmse_by_kind_phase:
+                return _finite_uncertainty(rmse_by_kind_phase[(kind_key, phase_key)])
+
+    for kind_key in kind_keys:
+        nested = rmse_by_kind_phase.get(kind_key)
+        if isinstance(nested, Mapping):
+            for phase_key in phase_keys:
+                if phase_key in nested:
+                    return _finite_uncertainty(nested[phase_key])
+    return None
+
+
+def _format_workflow_rmse_label(kind: str, rmse: float) -> str:
+    if kind == "P":
+        return f"AIMS4PT_cpx\nRMSE = {rmse:.2f} kbar"
+    return f"AIMS4PT_cpx\nRMSE = {rmse:.0f} $^\\circ$C"
+
+
+def _add_workflow_rmse_errorbars(
+    ax: plt.Axes,
+    methods: Sequence[Mapping[str, Any]],
+    x_positions: Sequence[float],
+    *,
+    kind: str,
+    rmse_by_kind_phase: Optional[Mapping[Any, Any]],
+    y_limits: Optional[tuple[float, float]] = None,
+    fontsize: float = MANUSCRIPT_ANNOTATION_SIZE,
+    color: str = "0.15",
+) -> None:
+    """Draw one AIMS4PT workflow RMSE scale bar in each this-study phase block."""
+    if not rmse_by_kind_phase or len(methods) == 0:
+        return
+
+    x_positions = np.asarray(x_positions, dtype=float)
+    if x_positions.size == 0:
+        return
+    block_edges = _x_position_edges(x_positions)
+
+    y_min, y_max = ax.get_ylim() if y_limits is None else y_limits
+    y_min, y_max = sorted((float(y_min), float(y_max)))
+    y_span = y_max - y_min
+    if y_span <= 0:
+        return
+    top_pad = max(0.035 * y_span, 0.12 if kind == "P" else 4.0)
+
+    seen_phase_types: set[str] = set()
+    for i, method in enumerate(methods):
+        if _clean_str(method.get("category")) != "This study":
+            continue
+        phase_type = _clean_str(method.get("type"))
+        if not phase_type or phase_type in seen_phase_types:
+            continue
+        rmse = _lookup_workflow_rmse(rmse_by_kind_phase, kind, phase_type)
+        if rmse is None:
+            continue
+
+        j = i
+        while (
+            j + 1 < len(methods)
+            and _clean_str(methods[j + 1].get("category")) == "This study"
+            and _clean_str(methods[j + 1].get("type")) == phase_type
+        ):
+            j += 1
+
+        x0 = float(block_edges[i])
+        x1 = float(block_edges[j + 1])
+        block_width = max(x1 - x0, 0.1)
+        x_anchor = x0 + min(max(0.12 * block_width, 0.20), 0.48)
+        y0 = y_max - top_pad - rmse
+        y0 = max(y0, y_min + top_pad)
+        if y0 + rmse > y_max:
+            y0 = y_max - rmse - 0.5 * top_pad
+        y1 = y0 + rmse
+        if y0 < y_min or y1 > y_max:
+            continue
+        y_label = 0.5 * (y0 + y1)
+        cap_half_width = min(max(0.022 * block_width, 0.05), 0.11)
+
+        ax.vlines(
+            x_anchor,
+            y0,
+            y1,
+            color=color,
+            lw=3.2,
+            zorder=5.2,
+            clip_on=False,
+        )
+        ax.hlines(
+            [y0, y1],
+            x_anchor - cap_half_width,
+            x_anchor + cap_half_width,
+            color=color,
+            lw=3.2,
+            zorder=5.2,
+            clip_on=False,
+        )
+        ax.text(
+            x_anchor + min(max(0.06 * block_width, 0.12), 0.35),
+            y_label,
+            _format_workflow_rmse_label(kind, rmse),
+            ha="left",
+            va="center",
+            fontsize=fontsize,
+            color=color,
+            linespacing=0.95,
+            zorder=5.3,
+            clip_on=False,
+        )
+        seen_phase_types.add(phase_type)
 
 
 def _add_subgroup_background(
@@ -2163,6 +2301,7 @@ def _abbreviate_literature_cite(cite: Any) -> str:
         ("budi-santoso", "2013", "B-S13"),
         ("budi santoso", "2013", "B-S13"),
         ("widiyantoro", "2018", "Wid18"),
+        ("costa", "2013", "Cos13"),
         ("li", "2021", "Li21"),
         ("preece", "2014", "Pre14"),
         ("preece", "2016", "Pre16"),
@@ -2367,6 +2506,7 @@ def _add_category_and_type_bands(
     type_y: float = 0.985,
     show_type_labels: bool = True,
     category_wrap_width: int = 14,
+    show_last_type_boundary: bool = True,
 ) -> None:
     x_positions = np.asarray(x_positions, dtype=float)
     if len(methods) == 0 or x_positions.size == 0:
@@ -2374,11 +2514,7 @@ def _add_category_and_type_bands(
 
     # Use midpoints between adjacent columns so non-uniform column spacing keeps
     # group separators aligned with the plotted data.
-    block_edges = np.empty(x_positions.size + 1, dtype=float)
-    block_edges[0] = x_positions[0] - 0.5
-    block_edges[-1] = x_positions[-1] + 0.5
-    if x_positions.size > 1:
-        block_edges[1:-1] = 0.5 * (x_positions[:-1] + x_positions[1:])
+    block_edges = _x_position_edges(x_positions)
 
     category_ranges = []
     start = 0
@@ -2430,7 +2566,8 @@ def _add_category_and_type_bands(
                 color="0.20",
             )
         ax.axvline(x0, color="0.75", lw=1.0, zorder=1)
-        ax.axvline(x1, color="0.75", lw=1.0, zorder=1)
+        if show_last_type_boundary or i1 < len(methods) - 1:
+            ax.axvline(x1, color="0.75", lw=1.0, zorder=1)
 
 
 def _add_pressure_reservoir_bands(
@@ -2790,6 +2927,7 @@ def _draw_literature_comparison_violin(
                 bw_method=0.25,
                 zorder=zorder,
                 show_quartile_interval=False,
+                show_median=False,
             )
         except (ValueError, np.linalg.LinAlgError):
             vp = {}
@@ -2980,7 +3118,7 @@ def _plot_this_study_dual_violins_on_literature_comparison(
             lw=1.3,
             zorder=3.4,
             median_color="k",
-            median_lw=1.5,
+            median_lw=2.6,
             median_width_frac=0.34,
             median_filter_outliers=False,
             show_quartile_interval=show_quartile_interval,
@@ -3076,12 +3214,18 @@ def _annotate_literature_uncertainty_below_xtick(
     fontsize: float,
 ) -> None:
     finite_uncertainty = _finite_uncertainty(uncertainty)
-    if kind != "P" or finite_uncertainty is None:
+    if finite_uncertainty is None:
+        return
+    if kind == "P":
+        label = f"{finite_uncertainty:.1f} kbar"
+    elif kind == "T":
+        label = f"{finite_uncertainty:.1f} °C"
+    else:
         return
     ax.text(
         x_center,
         -0.06,
-        f"{finite_uncertainty:.1f} kbar",
+        label,
         transform=ax.get_xaxis_transform(),
         ha="center",
         va="top",
@@ -3191,6 +3335,11 @@ def _plot_ranked_literature_panel(
     reservoir_label_right_margin: float = 0.10,
     this_study_x_spacing: float = 1.0,
     show_quartile_interval: bool = True,
+    annotate_model_rmse: bool = True,
+    workflow_rmse_by_kind_phase: Optional[Mapping[Any, Any]] = None,
+    workflow_rmse_errorbar_fontsize: Optional[float] = None,
+    show_pressure_reservoir_labels: bool = True,
+    show_last_type_boundary: bool = True,
 ) -> None:
     this_cols = _build_this_study_columns_for_comparison(
         kind,
@@ -3219,7 +3368,7 @@ def _plot_ranked_literature_panel(
     x_lit = lit_start + np.arange(len(lit_methods), dtype=float)
     x_all = np.concatenate([this_x, x_lit])
     reservoir_label_x = None
-    if kind == "P" and pressure_reservoir_bands:
+    if kind == "P" and pressure_reservoir_bands and show_pressure_reservoir_labels:
         reservoir_label_x = (x_all[-1] if x_all.size else 0.5) + reservoir_label_x_offset
     _add_category_and_type_bands(
         ax,
@@ -3227,8 +3376,9 @@ def _plot_ranked_literature_panel(
         x_all,
         category_fontsize=group_label_fontsize,
         type_fontsize=annotation_fontsize,
+        show_last_type_boundary=show_last_type_boundary,
     )
-    if kind == "P" and pressure_reservoir_bands:
+    if kind == "P" and pressure_reservoir_bands and show_pressure_reservoir_labels:
         _add_pressure_reservoir_bands(
             ax,
             pressure_reservoir_bands,
@@ -3246,6 +3396,7 @@ def _plot_ranked_literature_panel(
             annotation_fontsize=annotation_fontsize,
             x_centers=this_x,
             show_quartile_interval=show_quartile_interval,
+            annotate_rmse=annotate_model_rmse,
         )
 
     if len(lit_methods) > 0:
@@ -3342,6 +3493,16 @@ def _plot_ranked_literature_panel(
             ax.set_ylim(*temperature_ylim)
         ax.tick_params(axis="y", labelsize=tick_labelsize)
     ax.xaxis.label.set_size(axis_label_fontsize)
+
+    _add_workflow_rmse_errorbars(
+        ax,
+        methods_all,
+        x_all,
+        kind=kind,
+        rmse_by_kind_phase=workflow_rmse_by_kind_phase,
+        y_limits=pressure_ylim if kind == "P" else temperature_ylim,
+        fontsize=annotation_fontsize if workflow_rmse_errorbar_fontsize is None else workflow_rmse_errorbar_fontsize,
+    )
 
     if add_literature_legend:
     
@@ -3901,11 +4062,19 @@ def plot_ranked_thermobarometry_literature_comparison(
     include_temperature: bool = True,
     split_literature_legend: bool = False,
     literature_legend_bbox_to_anchor: tuple[float, float] = (0.58, 0.50),
+    literature_tick_labelsize: float = MANUSCRIPT_TICK_LABEL_SIZE,
     literature_model_tick_labelsize: float = MANUSCRIPT_MODEL_TICK_LABEL_SIZE,
+    literature_group_label_fontsize: float = MANUSCRIPT_GROUP_LABEL_SIZE,
+    literature_annotation_fontsize: float = MANUSCRIPT_ANNOTATION_SIZE,
     literature_reservoir_label_x_offset: float = 0.95,
     literature_reservoir_label_right_margin: float = 0.10,
     literature_this_study_x_spacing: float = 1.0,
     show_quartile_interval: bool = True,
+    literature_annotate_model_rmse: bool = True,
+    literature_workflow_rmse_by_kind_phase: Optional[Mapping[Any, Any]] = None,
+    literature_workflow_rmse_errorbar_fontsize: Optional[float] = None,
+    literature_show_pressure_reservoir_labels: bool = True,
+    literature_show_last_type_boundary: bool = True,
 ) -> tuple[plt.Figure, np.ndarray]:
     """
     Plot the notebook-style two-panel "this study vs literature" comparison.
@@ -3961,7 +4130,10 @@ def plot_ranked_thermobarometry_literature_comparison(
         depth_tick_step=depth_tick_step,
         depth_max=depth_max,
         use_model_abbreviations=use_model_abbreviations,
+        tick_labelsize=literature_tick_labelsize,
         model_tick_labelsize=literature_model_tick_labelsize,
+        group_label_fontsize=literature_group_label_fontsize,
+        annotation_fontsize=literature_annotation_fontsize,
         pressure_reservoir_bands=pressure_reservoir_bands,
         split_literature_legend=split_literature_legend,
         literature_legend_bbox_to_anchor=literature_legend_bbox_to_anchor,
@@ -3969,6 +4141,11 @@ def plot_ranked_thermobarometry_literature_comparison(
         reservoir_label_right_margin=literature_reservoir_label_right_margin,
         this_study_x_spacing=literature_this_study_x_spacing,
         show_quartile_interval=show_quartile_interval,
+        annotate_model_rmse=literature_annotate_model_rmse,
+        workflow_rmse_by_kind_phase=literature_workflow_rmse_by_kind_phase,
+        workflow_rmse_errorbar_fontsize=literature_workflow_rmse_errorbar_fontsize,
+        show_pressure_reservoir_labels=literature_show_pressure_reservoir_labels,
+        show_last_type_boundary=literature_show_last_type_boundary,
     )
     if include_temperature and temperature_literature_df is not None:
         _plot_ranked_literature_panel(
@@ -3984,9 +4161,17 @@ def plot_ranked_thermobarometry_literature_comparison(
             depth_tick_step=depth_tick_step,
             depth_max=depth_max,
             use_model_abbreviations=use_model_abbreviations,
+            tick_labelsize=literature_tick_labelsize,
             model_tick_labelsize=literature_model_tick_labelsize,
+            group_label_fontsize=literature_group_label_fontsize,
+            annotation_fontsize=literature_annotation_fontsize,
             this_study_x_spacing=literature_this_study_x_spacing,
             show_quartile_interval=show_quartile_interval,
+            annotate_model_rmse=literature_annotate_model_rmse,
+            workflow_rmse_by_kind_phase=literature_workflow_rmse_by_kind_phase,
+            workflow_rmse_errorbar_fontsize=literature_workflow_rmse_errorbar_fontsize,
+            show_pressure_reservoir_labels=literature_show_pressure_reservoir_labels,
+            show_last_type_boundary=literature_show_last_type_boundary,
         )
 
     if panel_labels:
@@ -4570,7 +4755,7 @@ def export_ranked_thermobarometry_model_summary(
     model_selection_mode: str = "cumulative",
     cumulative_selection_threshold: float = 80.0,
 ) -> dict[str, pd.DataFrame]:
-    """Export Fig. 8-9 model summaries using the same Tukey-fence state."""
+    """Export Fig. 8-9 model and violin summaries using the same ranking state."""
     state = _build_ranked_thermobarometry_state(
         cpx_only_workflows,
         cpx_liq_workflows,
@@ -4713,9 +4898,131 @@ def export_ranked_thermobarometry_model_summary(
 
         return pd.DataFrame(rows)
 
+    def _percentile_value(values: np.ndarray, percentile: float) -> float:
+        if values.size == 0:
+            return np.nan
+        return float(np.nanpercentile(values, percentile))
+
+    def _violin_summary_row(
+        kind: str,
+        col: Mapping[str, Any],
+        subset: str,
+        values: Sequence[float],
+        *,
+        selected_by_AIMS4PT: bool,
+        proportion_samples_favored_model: Optional[float],
+        stats_source: str,
+    ) -> dict[str, Any]:
+        raw_values_arr = np.asarray(values, dtype=float).ravel()
+        raw_values_arr = raw_values_arr[np.isfinite(raw_values_arr)]
+        values_arr = _remove_boxplot_outliers(raw_values_arr)
+        row = {
+            "quantity": kind,
+            "unit": "kbar" if kind == "P" else "degC",
+            "eruption": col.get("eruption"),
+            "phase_type": col.get("type"),
+            "model": col.get("model"),
+            "model_label": col.get("label"),
+            "sample_subset": subset,
+            "stats_source": stats_source,
+            "n_samples": int(values_arr.size),
+            "n_samples_raw": int(raw_values_arr.size),
+            "n_samples_after_tukey": int(values_arr.size),
+            "min": _summary_value(values_arr, "min"),
+            "q1": _percentile_value(values_arr, 25),
+            "median": _summary_value(values_arr, "median"),
+            "q3": _percentile_value(values_arr, 75),
+            "max": _summary_value(values_arr, "max"),
+            "mean": float(np.nanmean(values_arr)) if values_arr.size else np.nan,
+            "std": float(np.nanstd(values_arr, ddof=1)) if values_arr.size > 1 else np.nan,
+            "proportion_samples_favored_model": proportion_samples_favored_model,
+            "selected_by_AIMS4PT": bool(selected_by_AIMS4PT),
+        }
+        if kind == "P":
+            row.update(
+                {
+                    "min_depth_km": _depth_value(row["min"]),
+                    "q1_depth_km": _depth_value(row["q1"]),
+                    "median_depth_km": _depth_value(row["median"]),
+                    "q3_depth_km": _depth_value(row["q3"]),
+                    "max_depth_km": _depth_value(row["max"]),
+                }
+            )
+        return row
+
+    def _build_violin_summary(kind: str) -> pd.DataFrame:
+        rows: list[dict[str, Any]] = []
+        seen_overall: set[tuple[Any, Any]] = set()
+        kind_state = state[kind]
+        this_cols = _build_this_study_columns_for_comparison(
+            kind,
+            state,
+            selection_threshold=selection_threshold,
+            model_selection_mode=model_selection_mode,
+            cumulative_selection_threshold=cumulative_selection_threshold,
+            use_model_abbreviations=False,
+        )
+        for col in this_cols:
+            if "subcolumns" in col:
+                continue
+            pct = col.get("pct")
+            try:
+                pct_value = float(pct)
+            except (TypeError, ValueError):
+                pct_value = np.nan
+            favored_fraction = pct_value / 100.0 if np.isfinite(pct_value) else np.nan
+            rows.append(
+                _violin_summary_row(
+                    kind,
+                    col,
+                    "all_samples",
+                    col.get("data", []),
+                    selected_by_AIMS4PT=True,
+                    proportion_samples_favored_model=favored_fraction,
+                    stats_source="plotted violin values after Tukey filtering",
+                )
+            )
+            rows.append(
+                _violin_summary_row(
+                    kind,
+                    col,
+                    "favored_subset",
+                    col.get("favored_data", []),
+                    selected_by_AIMS4PT=True,
+                    proportion_samples_favored_model=favored_fraction,
+                    stats_source="sample-level favored-model values after Tukey filtering",
+                )
+            )
+            overall_key = (col.get("eruption"), col.get("type"))
+            if overall_key not in seen_overall:
+                eruption = str(col.get("eruption"))
+                phase_type = str(col.get("type"))
+                overall_values = _selected_predictions_from_best_models(
+                    kind_state["results"][eruption][phase_type],
+                    kind_state["best_models"][eruption][phase_type],
+                )
+                overall_col = dict(col)
+                overall_col["model"] = "overall"
+                overall_col["label"] = "AIMS4PT_cpx selected best models"
+                rows.append(
+                    _violin_summary_row(
+                        kind,
+                        overall_col,
+                        "overall_selected_best_models_after_tukey",
+                        overall_values,
+                        selected_by_AIMS4PT=True,
+                        proportion_samples_favored_model=1.0,
+                        stats_source="selected best-model values after Tukey filtering",
+                    )
+                )
+                seen_overall.add(overall_key)
+        return pd.DataFrame(rows)
+
     summaries = {
         "P_summary": _build_kind_summary("P"),
         "T_summary": _build_kind_summary("T"),
+        "P_violin_summary": _build_violin_summary("P"),
+        "T_violin_summary": _build_violin_summary("T"),
     }
 
     out_path = Path(out_path)

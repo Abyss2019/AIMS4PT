@@ -13,6 +13,7 @@ import sys
 import traceback
 import warnings
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -44,6 +45,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
+from matplotlib.colors import LinearSegmentedColormap
 import seaborn as sns
 from PIL import Image, ImageColor, ImageDraw, ImageFont
 
@@ -91,8 +93,7 @@ CPX_TOTAL_MIN = 97.0
 CPX_TOTAL_MAX = 103.0
 CPX_STOICH_MIN = 0.9
 CPX_STOICH_MAX = 1.1
-DIRECTIONAL_SENSITIVITY_METHOD = "central_plus_minus"
-FRAMEWORK_SENSITIVITY_VERSION = "robust_workflow_v2"
+DIRECTIONAL_SENSITIVITY_METHOD = "central_plus_minus_h2o20_relative_nonzero"
 DIRECTIONAL_RELATIVE_ERRORS = {
     "SiO2": 0.03,
     "TiO2": 0.08,
@@ -105,7 +106,7 @@ DIRECTIONAL_RELATIVE_ERRORS = {
     "Cr2O3": 0.08,
     "K2O": 0.08,
 }
-DIRECTIONAL_H2O_ABS_SIGMA = 3.0
+DIRECTIONAL_H2O_RELATIVE_ERROR = 0.20
 DIRECTIONAL_CPX_BASE_ORDER = ["SiO2", "TiO2", "Al2O3", "FeO", "MgO", "MnO", "CaO", "Na2O", "Cr2O3", "K2O"]
 DIRECTIONAL_LIQ_BASE_ORDER = ["SiO2", "TiO2", "Al2O3", "FeO", "MgO", "MnO", "CaO", "Na2O", "K2O", "H2O"]
 DIRECTIONAL_DISPLAY_BASE = {"FeO": "FeOt"}
@@ -156,8 +157,6 @@ def ensure_dirs(output_dir: Path) -> dict[str, Path]:
         "kd_fig": output_dir / "kd" / "figures_test_subset",
         "analytical": output_dir / "analytical",
         "analytical_fig": output_dir / "analytical" / "figures_test_subset",
-        "framework": output_dir / "framework",
-        "framework_fig": output_dir / "framework" / "figures_test_subset",
     }
     for path in paths.values():
         path.mkdir(parents=True, exist_ok=True)
@@ -277,22 +276,6 @@ def predict_with_optional_cache(spec: ModelSpec, cpx: pd.DataFrame, liq: pd.Data
         pred = easy_predict_cpx_liq(input_data, T_P=spec.target_type, dir=spec.model.models_dir)
         return pd.Series(pred, index=cpx.index, name="P_kbar" if spec.target_type == "P" else "T_C")
     return spec.model.predict(cpx, liq)
-
-
-def framework_safe_predict(spec: ModelSpec, cpx: pd.DataFrame, liq: pd.DataFrame) -> tuple[pd.Series, dict[object, str]]:
-    """Predict for framework screening without slow per-row retries."""
-    if len(cpx) == 0:
-        return pd.Series(dtype=float), {}
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            pred = predict_with_optional_cache(spec, cpx.copy(), liq.copy())
-        pred = pd.Series(pred, index=cpx.index, dtype="float64")
-        return pred, {idx: "" for idx in cpx.index}
-    except Exception as exc:
-        message = f"{type(exc).__name__}: {exc}"
-        pred = pd.Series(np.nan, index=cpx.index, dtype="float64")
-        return pred, {idx: message for idx in cpx.index}
 
 
 def compatible_baseline(path: Path, test_ids: set[object], expected_models: set[str], expected_rows: int) -> pd.DataFrame | None:
@@ -1062,6 +1045,20 @@ def model_uses_oxide(spec: ModelSpec, phase: str, oxide: str) -> bool:
     return False
 
 
+def model_uses_liq_h2o(spec: ModelSpec) -> bool:
+    """Return True when a model declares melt H2O as an input feature."""
+    return model_uses_oxide(spec, "liq", "H2O_liq")
+
+
+def _h2o_only_liq_input(liq: pd.DataFrame, cpx: pd.DataFrame) -> pd.DataFrame:
+    """Build a liquid table carrying only melt H2O for cpx-only water terms."""
+    if "H2O_liq" in liq.columns:
+        h2o = pd.to_numeric(liq["H2O_liq"], errors="coerce").fillna(0.0)
+    else:
+        h2o = pd.Series(0.0, index=cpx.index, dtype="float64")
+    return pd.DataFrame({"H2O_liq": h2o.reindex(cpx.index).fillna(0.0)}, index=cpx.index)
+
+
 def oxide_base_name(oxide: str, phase: str) -> str:
     """Return the base oxide name from a phase-specific column."""
     suffix = f"_{phase}"
@@ -1110,21 +1107,33 @@ def directional_single_oxide_specs(test_df: pd.DataFrame, model_type: str) -> li
                     error_type="relative",
                 )
             )
+        if model_type == "cpx_only" and "H2O_liq" in test_df.columns:
+            rel_error = DIRECTIONAL_H2O_RELATIVE_ERROR
+            specs.append(
+                DirectionalPerturbationSpec(
+                    phase="liq",
+                    storage_oxide="H2O_liq",
+                    display_oxide="H2O_liq",
+                    rel_error=rel_error,
+                    rel_error_label=directional_rel_error_label(rel_error),
+                    error_type="relative",
+                )
+            )
     if "liq" in phases:
         for base in DIRECTIONAL_LIQ_BASE_ORDER:
             storage_oxide = f"{base}_liq"
             if storage_oxide not in test_df.columns:
                 continue
             if base == "H2O":
+                rel_error = DIRECTIONAL_H2O_RELATIVE_ERROR
                 specs.append(
                     DirectionalPerturbationSpec(
                         phase="liq",
                         storage_oxide=storage_oxide,
                         display_oxide=storage_oxide,
-                        rel_error=np.nan,
-                        rel_error_label="3wtpct_abs",
-                        error_type="absolute_wt_pct",
-                        abs_sigma=DIRECTIONAL_H2O_ABS_SIGMA,
+                        rel_error=rel_error,
+                        rel_error_label=directional_rel_error_label(rel_error),
+                        error_type="relative",
                     )
                 )
                 continue
@@ -1573,6 +1582,7 @@ def run_directional_equal_error_analysis(
             "minus_prediction",
             "plus_status",
             "minus_status",
+            "zero_value_skipped",
             "error_type",
             "sensitivity_method",
         }
@@ -1597,8 +1607,12 @@ def run_directional_equal_error_analysis(
 
     summary = summarize_directional_equal_error(long_df)
     summary.to_csv(paths["analytical"] / "directional_equal_error_oat_summary_test_subset.csv", index=False)
-    fig_count = plot_directional_equal_error_figures(long_df, paths["analytical_fig"])
-    fig_count += plot_directional_equal_abs_composites(long_df, paths["analytical_fig"])
+    write_directional_nonzero_oxide_count_tables(long_df, paths["analytical"])
+    plot_df = apply_directional_nonzero_oxide_filter(long_df)
+    fig_count = plot_directional_equal_error_figures(plot_df, paths["analytical_fig"])
+    fig_count += plot_directional_equal_abs_composites(plot_df, paths["analytical_fig"])
+    fig_count += plot_directional_key_feature_abs_composites(plot_df, paths["analytical_fig"], paths["analytical"])
+    fig_count += plot_analytical_uncertainty_maintext_combined(plot_df, paths["analytical_fig"])
     return long_df, fig_count
 
 
@@ -1698,7 +1712,8 @@ def compute_directional_central_difference(
             else:
                 sigma = original * float(perturb_spec.rel_error)
             plus_value = original + sigma
-            minus_value = (original - sigma).clip(lower=0.0)
+            minus_value = original - sigma
+            zero_value_skipped = original.eq(0)
             plus_df[storage_oxide] = plus_value
             minus_df[storage_oxide] = minus_value
 
@@ -1739,6 +1754,7 @@ def compute_directional_central_difference(
                         "rel_error_label": perturb_spec.rel_error_label,
                         "sign": "plus_minus",
                         "baseline_value": original,
+                        "zero_value_skipped": zero_value_skipped,
                         "perturbed_value": np.nan,
                         "plus_value": plus_value,
                         "minus_value": minus_value,
@@ -1765,7 +1781,6 @@ def compute_directional_central_difference(
                         "error_message": "",
                         "error_type": perturb_spec.error_type,
                         "sensitivity_method": DIRECTIONAL_SENSITIVITY_METHOD,
-                        "framework_sensitivity_version": FRAMEWORK_SENSITIVITY_VERSION,
                     }
                 )
                 for idx in rows.index:
@@ -1775,6 +1790,10 @@ def compute_directional_central_difference(
                         rows.loc[idx, "plus_status"] = "baseline_failed"
                         rows.loc[idx, "minus_status"] = "baseline_failed"
                         rows.loc[idx, "error_message"] = err or "baseline prediction returned NaN"
+                rows.loc[zero_value_skipped, "status"] = "zero_value_skipped"
+                rows.loc[zero_value_skipped, "plus_status"] = "zero_value_skipped"
+                rows.loc[zero_value_skipped, "minus_status"] = "zero_value_skipped"
+                rows.loc[zero_value_skipped, "error_message"] = "baseline input value is zero; skipped from sensitivity summary"
 
                 side_ready = rows["status"].eq("ok")
                 if not_used_by_model:
@@ -1811,837 +1830,6 @@ def compute_directional_central_difference(
                 records.append(rows)
 
     return pd.concat(records, ignore_index=True)
-
-
-def _abbreviate_best_model_series(series: pd.Series, target_type: str) -> pd.Series:
-    """Convert selected workflow model names to Table 1 abbreviations."""
-    out = pd.Series(np.nan, index=series.index, dtype=object)
-    for idx, value in series.items():
-        if value is None or pd.isna(value):
-            continue
-        out.loc[idx] = get_model_abbreviation(str(value), target_type)
-    return out
-
-
-def _empty_framework_state(index: pd.Index, status: str, message: str = "") -> pd.DataFrame:
-    """Return an empty per-sample framework state after a workflow-level failure."""
-    return pd.DataFrame(
-        {
-            "prediction": pd.Series(np.nan, index=index, dtype="float64"),
-            "best_model": pd.Series(np.nan, index=index, dtype=object),
-            "status": pd.Series(status, index=index, dtype=object),
-            "error_message": pd.Series(message, index=index, dtype=object),
-            "rankable_model_count": pd.Series(np.nan, index=index, dtype="float64"),
-            "feature_ood_count": pd.Series(np.nan, index=index, dtype="float64"),
-            "tas_ood_count": pd.Series(np.nan, index=index, dtype="float64"),
-            "pt_ood_count": pd.Series(np.nan, index=index, dtype="float64"),
-        },
-        index=index,
-    )
-
-
-def _finite_reason_count(row: pd.Series) -> int:
-    """Count models that survived workflow filters and have finite deviation scores."""
-    count = 0
-    for value in row:
-        if isinstance(value, (int, float, np.integer, np.floating)) and np.isfinite(value):
-            count += 1
-    return count
-
-
-def predict_framework_state(
-    model_specs: list[ModelSpec],
-    *,
-    model_type: str,
-    target_type: str,
-    cpx: pd.DataFrame,
-    liq: pd.DataFrame,
-) -> pd.DataFrame:
-    """Run the AIMS4PT selection workflow and return per-sample final state."""
-    selected_specs = [
-        spec
-        for spec in model_specs
-        if spec.model_type == model_type and spec.target_type == target_type
-    ]
-    if not selected_specs:
-        return _empty_framework_state(cpx.index, "no_models", "No models available for this framework target.")
-
-    from aims4pt.data_tools.rocks import get_TAS_rock_types, get_volcanic_rock_series
-    from aims4pt.model_tools.CpxTBSelect import workflow_thermobarometry
-    from aims4pt.statistic_tools.density_region_analysis import rock_type_check
-
-    model_list = [spec.model for spec in selected_specs]
-    workflow = workflow_thermobarometry(model_list)
-    input_liq = liq if model_type == "cpx_liq" else pd.DataFrame(
-        {"H2O_liq": np.zeros(len(cpx), dtype=float)},
-        index=cpx.index,
-    )
-
-    prediction_df = pd.DataFrame(index=cpx.index)
-    ood_mask_df = pd.DataFrame(index=cpx.index, dtype=bool)
-    calculated_deviation_df = pd.DataFrame(index=cpx.index, dtype=float)
-    petrological_check_df = pd.DataFrame(index=cpx.index, dtype=bool)
-    p_t_mask_df = pd.DataFrame(False, index=cpx.index, columns=[], dtype=bool)
-    has_ood_detector: dict[str, bool] = {}
-
-    if model_type == "cpx_liq":
-        tas_rock_type = input_liq.apply(get_TAS_rock_types, axis=1)
-        volcanic_rock_series = input_liq.apply(get_volcanic_rock_series, axis=1)
-    else:
-        tas_rock_type = None
-        volcanic_rock_series = None
-
-    for spec in selected_specs:
-        model = spec.model
-        model_name = getattr(model, "model_name", spec.name)
-        pred, pred_errors = framework_safe_predict(spec, cpx, input_liq)
-        pred = pd.Series(pred, index=cpx.index, dtype="float64")
-        pred_failed = pred.isna() | pd.Series(
-            [bool(pred_errors.get(idx, "")) for idx in cpx.index],
-            index=cpx.index,
-            dtype=bool,
-        )
-        prediction_df[model_name] = pred
-
-        ood_detector = getattr(model, "OOD_detector", None)
-        has_ood_detector[model_name] = ood_detector is not None
-        if ood_detector is not None:
-            try:
-                ood_mask = ood_detector.is_ood(cpx, input_liq)
-            except TypeError:
-                ood_mask = ood_detector.is_ood(cpx)
-            except Exception:
-                ood_mask = np.ones(len(cpx), dtype=bool)
-        else:
-            ood_mask = np.zeros(len(cpx), dtype=bool)
-        ood_mask_df[model_name] = np.asarray(ood_mask, dtype=bool) | pred_failed.to_numpy(dtype=bool)
-
-        deviation_function = getattr(model, "deviation_function", None)
-        if deviation_function is not None:
-            try:
-                deviation_values = deviation_function.predict_deviation(cpx, input_liq)
-            except TypeError:
-                deviation_values = deviation_function.predict_deviation(cpx)
-            except Exception:
-                deviation_values = np.full(len(cpx), np.nan)
-        else:
-            deviation_values = np.full(len(cpx), np.nan)
-        calculated_deviation_df[model_name] = np.asarray(deviation_values, dtype=float)
-
-        if (
-            model_type == "cpx_liq"
-            and hasattr(model, "rock_types")
-            and hasattr(model, "volcanic_rock_series")
-            and tas_rock_type is not None
-            and volcanic_rock_series is not None
-        ):
-            tas_mask = [
-                rock_type_check(rt, model.rock_types, report=False)
-                for rt in tas_rock_type
-            ]
-            series_mask = [
-                rock_type_check(rs, model.volcanic_rock_series, report=False)
-                for rs in volcanic_rock_series
-            ]
-            petro_mask = [tas_ok and series_ok for tas_ok, series_ok in zip(tas_mask, series_mask)]
-            petrological_check_df[model_name] = np.asarray(petro_mask, dtype=bool)
-        else:
-            petrological_check_df[model_name] = np.ones(len(cpx), dtype=bool)
-
-        y_min = getattr(model, "y_min", None)
-        y_max = getattr(model, "y_max", None)
-        if y_min is not None and y_max is not None:
-            p_t_mask = (pred < y_min) | (pred > y_max) | pred_failed
-        else:
-            p_t_mask = pred_failed.copy()
-        p_t_mask_df[model_name] = np.asarray(p_t_mask, dtype=bool)
-
-    workflow.prediction_df = prediction_df
-    workflow.ood_mask_df = ood_mask_df
-    workflow.calculated_deviation_df = calculated_deviation_df
-    workflow.petrological_check_df = petrological_check_df
-    workflow.p_t_mask_df = p_t_mask_df
-    workflow.has_ood_detector = pd.Series(has_ood_detector)
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            prediction = workflow.decision()
-    except Exception as exc:
-        message = f"{type(exc).__name__}: {exc}"
-        return _empty_framework_state(cpx.index, "workflow_failed", message)
-
-    prediction = pd.Series(prediction, index=cpx.index, dtype="float64")
-    best_model = _abbreviate_best_model_series(workflow.get_best_model_series(), target_type)
-    status = pd.Series("ok", index=cpx.index, dtype=object)
-    status.loc[prediction.isna()] = "no_valid_framework_model"
-    error_message = pd.Series("", index=cpx.index, dtype=object)
-    error_message.loc[prediction.isna()] = "No selected framework prediction."
-
-    if workflow.failure_reason_df is not None:
-        rankable_model_count = workflow.failure_reason_df.apply(_finite_reason_count, axis=1)
-    else:
-        rankable_model_count = pd.Series(np.nan, index=cpx.index, dtype="float64")
-
-    feature_ood_count = (
-        workflow.ood_mask_df.sum(axis=1).astype(float)
-        if workflow.ood_mask_df is not None
-        else pd.Series(np.nan, index=cpx.index, dtype="float64")
-    )
-    tas_ood_count = (
-        (~workflow.petrological_check_df).sum(axis=1).astype(float)
-        if workflow.petrological_check_df is not None
-        else pd.Series(np.nan, index=cpx.index, dtype="float64")
-    )
-    pt_ood_count = (
-        workflow.p_t_mask_df.sum(axis=1).astype(float)
-        if workflow.p_t_mask_df is not None
-        else pd.Series(np.nan, index=cpx.index, dtype="float64")
-    )
-
-    return pd.DataFrame(
-        {
-            "prediction": prediction,
-            "best_model": best_model,
-            "status": status,
-            "error_message": error_message,
-            "rankable_model_count": rankable_model_count,
-            "feature_ood_count": feature_ood_count,
-            "tas_ood_count": tas_ood_count,
-            "pt_ood_count": pt_ood_count,
-        },
-        index=cpx.index,
-    )
-
-
-def compute_framework_baseline_states(
-    test_df: pd.DataFrame,
-    model_specs: list[ModelSpec],
-    out_path: Path,
-) -> dict[tuple[str, str], pd.DataFrame]:
-    """Compute baseline AIMS4PT final predictions for each independent framework."""
-    cpx, liq = split_inputs(test_df)
-    states: dict[tuple[str, str], pd.DataFrame] = {}
-    rows: list[dict[str, object]] = []
-    for model_type in ["cpx_liq", "cpx_only"]:
-        for target_type in ["P", "T"]:
-            state = predict_framework_state(
-                model_specs,
-                model_type=model_type,
-                target_type=target_type,
-                cpx=cpx,
-                liq=liq,
-            )
-            states[(model_type, target_type)] = state
-            for idx, sample in test_df.iterrows():
-                rows.append(
-                    {
-                        "id": sample["id"],
-                        "split": "test_subset",
-                        "model_type": model_type,
-                        "target_type": target_type,
-                        "prediction": state.loc[idx, "prediction"],
-                        "best_model": state.loc[idx, "best_model"],
-                        "status": state.loc[idx, "status"],
-                        "rankable_model_count": state.loc[idx, "rankable_model_count"],
-                        "feature_ood_count": state.loc[idx, "feature_ood_count"],
-                        "tas_ood_count": state.loc[idx, "tas_ood_count"],
-                        "pt_ood_count": state.loc[idx, "pt_ood_count"],
-                        "error_message": state.loc[idx, "error_message"],
-                    }
-                )
-    pd.DataFrame(rows).to_csv(out_path, index=False)
-    return states
-
-
-def expected_framework_directional_rows(test_df: pd.DataFrame, model_specs: list[ModelSpec]) -> int:
-    """Return the expected row count for framework directional sensitivity output."""
-    available_targets = {
-        model_type: {
-            spec.target_type
-            for spec in model_specs
-            if spec.model_type == model_type
-        }
-        for model_type in ["cpx_liq", "cpx_only"]
-    }
-    return expected_framework_directional_rows_for_targets(test_df, available_targets)
-
-
-def expected_framework_directional_rows_for_targets(
-    test_df: pd.DataFrame,
-    available_targets: dict[str, set[str]] | None = None,
-) -> int:
-    """Return expected framework rows without importing model objects."""
-    if available_targets is None:
-        available_targets = {
-            "cpx_liq": {"P", "T"},
-            "cpx_only": {"P", "T"},
-        }
-    total = 0
-    for model_type in ["cpx_liq", "cpx_only"]:
-        total += len(test_df) * len(directional_single_oxide_specs(test_df, model_type)) * len(available_targets[model_type])
-    return total
-
-
-def _combined_framework_status(
-    *,
-    baseline_status: object,
-    plus_status: object,
-    minus_status: object,
-    plus_qc_status: object,
-    minus_qc_status: object,
-) -> str:
-    """Combine QC and workflow side statuses into one row status."""
-    plus_qc_ok = str(plus_qc_status) == "ok"
-    minus_qc_ok = str(minus_qc_status) == "ok"
-    if not plus_qc_ok and not minus_qc_ok:
-        return "qc_failed_both"
-    if not plus_qc_ok:
-        return "qc_failed_plus"
-    if not minus_qc_ok:
-        return "qc_failed_minus"
-    if str(baseline_status) != "ok":
-        return "baseline_failed"
-    plus_ok = str(plus_status) == "ok"
-    minus_ok = str(minus_status) == "ok"
-    if plus_ok and minus_ok:
-        return "ok"
-    if not plus_ok and not minus_ok:
-        return "framework_failed_both"
-    if not plus_ok:
-        return "framework_failed_plus"
-    return "framework_failed_minus"
-
-
-def compute_framework_directional_long(
-    test_df: pd.DataFrame,
-    model_specs: list[ModelSpec],
-    *,
-    baseline_path: Path,
-    out_path: Path,
-) -> pd.DataFrame:
-    """Compute final AIMS4PT sensitivity to oxide-specific central perturbations."""
-    if out_path.exists():
-        out_path.unlink()
-    baseline_states = compute_framework_baseline_states(test_df, model_specs, baseline_path)
-    first_write = True
-    records: list[pd.DataFrame] = []
-
-    for model_type in ["cpx_liq", "cpx_only"]:
-        model_targets = sorted(
-            {
-                spec.target_type
-                for spec in model_specs
-                if spec.model_type == model_type
-            }
-        )
-        for perturb_spec in directional_single_oxide_specs(test_df, model_type):
-            phase = perturb_spec.phase
-            storage_oxide = perturb_spec.storage_oxide
-            display_oxide = perturb_spec.display_oxide
-            print(
-                f"Framework central OAT: {model_type} {phase} {display_oxide} "
-                f"({perturb_spec.rel_error_label}; targets={model_targets})",
-                flush=True,
-            )
-            plus_df = test_df.copy()
-            minus_df = test_df.copy()
-            original = pd.to_numeric(test_df[storage_oxide], errors="coerce").fillna(0.0)
-            if perturb_spec.error_type == "absolute_wt_pct":
-                sigma = pd.Series(float(perturb_spec.abs_sigma), index=test_df.index, dtype="float64")
-            else:
-                sigma = original * float(perturb_spec.rel_error)
-            plus_value = original + sigma
-            minus_value = (original - sigma).clip(lower=0.0)
-            plus_df[storage_oxide] = plus_value
-            minus_df[storage_oxide] = minus_value
-
-            plus_qc = directional_qc_status(plus_df, phase)
-            minus_qc = directional_qc_status(minus_df, phase)
-            cpx_plus, liq_plus = split_inputs(plus_df)
-            cpx_minus, liq_minus = split_inputs(minus_df)
-
-            for target_type in model_targets:
-                baseline_state = baseline_states[(model_type, target_type)]
-                plus_state = predict_framework_state(
-                    model_specs,
-                    model_type=model_type,
-                    target_type=target_type,
-                    cpx=cpx_plus,
-                    liq=liq_plus,
-                )
-                minus_state = predict_framework_state(
-                    model_specs,
-                    model_type=model_type,
-                    target_type=target_type,
-                    cpx=cpx_minus,
-                    liq=liq_minus,
-                )
-                rows = pd.DataFrame(
-                    {
-                        "id": test_df["id"],
-                        "split": "test_subset",
-                        "model_type": model_type,
-                        "model": "AIMS4PT",
-                        "target_type": target_type,
-                        "phase": phase,
-                        "oxide": display_oxide,
-                        "storage_oxide": storage_oxide,
-                        "rel_error": perturb_spec.rel_error,
-                        "rel_error_label": perturb_spec.rel_error_label,
-                        "sign": "plus_minus",
-                        "baseline_value": original,
-                        "plus_value": plus_value,
-                        "minus_value": minus_value,
-                        "sigma_value": sigma,
-                        "baseline_prediction": baseline_state["prediction"],
-                        "plus_prediction": plus_state["prediction"],
-                        "minus_prediction": minus_state["prediction"],
-                        "signed_effect": np.nan,
-                        "abs_effect": np.nan,
-                        "baseline_best_model": baseline_state["best_model"],
-                        "plus_best_model": plus_state["best_model"],
-                        "minus_best_model": minus_state["best_model"],
-                        "baseline_status": baseline_state["status"],
-                        "plus_status": plus_state["status"],
-                        "minus_status": minus_state["status"],
-                        "plus_model_switched": False,
-                        "minus_model_switched": False,
-                        "any_model_switched": False,
-                        "baseline_rankable_model_count": baseline_state["rankable_model_count"],
-                        "plus_rankable_model_count": plus_state["rankable_model_count"],
-                        "minus_rankable_model_count": minus_state["rankable_model_count"],
-                        "baseline_feature_ood_count": baseline_state["feature_ood_count"],
-                        "plus_feature_ood_count": plus_state["feature_ood_count"],
-                        "minus_feature_ood_count": minus_state["feature_ood_count"],
-                        "baseline_tas_ood_count": baseline_state["tas_ood_count"],
-                        "plus_tas_ood_count": plus_state["tas_ood_count"],
-                        "minus_tas_ood_count": minus_state["tas_ood_count"],
-                        "baseline_pt_ood_count": baseline_state["pt_ood_count"],
-                        "plus_pt_ood_count": plus_state["pt_ood_count"],
-                        "minus_pt_ood_count": minus_state["pt_ood_count"],
-                        "cpx_total": np.maximum(plus_qc["cpx_total"], minus_qc["cpx_total"]),
-                        "cpx_stoich_ratio": np.where(
-                            plus_qc["cpx_stoich_ratio"].sub(1.0).abs()
-                            >= minus_qc["cpx_stoich_ratio"].sub(1.0).abs(),
-                            plus_qc["cpx_stoich_ratio"],
-                            minus_qc["cpx_stoich_ratio"],
-                        ),
-                        "liq_total": np.maximum(plus_qc["liq_total"], minus_qc["liq_total"]),
-                        "plus_qc_status": plus_qc["status"],
-                        "minus_qc_status": minus_qc["status"],
-                        "status": "ok",
-                        "qc_error_message": _combine_side_messages(
-                            plus_qc["status"],
-                            plus_qc["qc_message"],
-                            minus_qc["status"],
-                            minus_qc["qc_message"],
-                        ),
-                        "error_message": "",
-                        "error_type": perturb_spec.error_type,
-                        "sensitivity_method": DIRECTIONAL_SENSITIVITY_METHOD,
-                        "framework_sensitivity_version": FRAMEWORK_SENSITIVITY_VERSION,
-                    }
-                )
-                rows["status"] = [
-                    _combined_framework_status(
-                        baseline_status=baseline_status,
-                        plus_status=plus_status,
-                        minus_status=minus_status,
-                        plus_qc_status=plus_qc_status,
-                        minus_qc_status=minus_qc_status,
-                    )
-                    for baseline_status, plus_status, minus_status, plus_qc_status, minus_qc_status in zip(
-                        rows["baseline_status"],
-                        rows["plus_status"],
-                        rows["minus_status"],
-                        rows["plus_qc_status"],
-                        rows["minus_qc_status"],
-                    )
-                ]
-                ready = (
-                    rows["status"].eq("ok")
-                    & rows["plus_prediction"].notna()
-                    & rows["minus_prediction"].notna()
-                )
-                effect = (rows.loc[ready, "plus_prediction"].astype(float) - rows.loc[ready, "minus_prediction"].astype(float)) / 2.0
-                rows.loc[ready, "signed_effect"] = effect
-                rows.loc[ready, "abs_effect"] = effect.abs()
-                plus_switch_ready = ready & rows["baseline_best_model"].notna() & rows["plus_best_model"].notna()
-                minus_switch_ready = ready & rows["baseline_best_model"].notna() & rows["minus_best_model"].notna()
-                rows.loc[plus_switch_ready, "plus_model_switched"] = (
-                    rows.loc[plus_switch_ready, "plus_best_model"].astype(str)
-                    != rows.loc[plus_switch_ready, "baseline_best_model"].astype(str)
-                )
-                rows.loc[minus_switch_ready, "minus_model_switched"] = (
-                    rows.loc[minus_switch_ready, "minus_best_model"].astype(str)
-                    != rows.loc[minus_switch_ready, "baseline_best_model"].astype(str)
-                )
-                rows["any_model_switched"] = rows["plus_model_switched"] | rows["minus_model_switched"]
-                rows["error_message"] = [
-                    "; ".join(
-                        message
-                        for message in [
-                            "" if str(plus_message) == "" else f"plus: {plus_message}",
-                            "" if str(minus_message) == "" else f"minus: {minus_message}",
-                        ]
-                        if message
-                    )
-                    for plus_message, minus_message in zip(
-                        plus_state["error_message"],
-                        minus_state["error_message"],
-                    )
-                ]
-
-                if out_path is not None:
-                    rows.to_csv(out_path, mode="a", header=first_write, index=False)
-                    first_write = False
-                records.append(rows)
-
-    return pd.concat(records, ignore_index=True)
-
-
-def summarize_framework_directional(long_df: pd.DataFrame) -> pd.DataFrame:
-    """Summarize framework final-result sensitivity by target, phase, and oxide."""
-    group_cols = ["model_type", "model", "target_type", "phase", "oxide", "rel_error", "rel_error_label", "error_type"]
-    ok = long_df[long_df["status"].eq("ok")].copy()
-    summary = (
-        ok.groupby(group_cols, dropna=False)
-        .agg(
-            n=("signed_effect", "size"),
-            median_sigma_value=("sigma_value", "median"),
-            median_signed_effect=("signed_effect", "median"),
-            mean_signed_effect=("signed_effect", "mean"),
-            p05_signed_effect=("signed_effect", lambda x: x.quantile(0.05)),
-            p95_signed_effect=("signed_effect", lambda x: x.quantile(0.95)),
-            median_abs_effect=("abs_effect", "median"),
-            p95_abs_effect=("abs_effect", lambda x: x.quantile(0.95)),
-            max_abs_effect=("abs_effect", "max"),
-            plus_model_switch_rate_pct=("plus_model_switched", lambda x: float(pd.Series(x, dtype=bool).mean() * 100.0)),
-            minus_model_switch_rate_pct=("minus_model_switched", lambda x: float(pd.Series(x, dtype=bool).mean() * 100.0)),
-            any_model_switch_rate_pct=("any_model_switched", lambda x: float(pd.Series(x, dtype=bool).mean() * 100.0)),
-            median_baseline_rankable_models=("baseline_rankable_model_count", "median"),
-            median_plus_rankable_models=("plus_rankable_model_count", "median"),
-            median_minus_rankable_models=("minus_rankable_model_count", "median"),
-        )
-        .reset_index()
-    )
-    failures = (
-        long_df[long_df["status"].ne("ok")]
-        .groupby(group_cols, dropna=False)
-        .size()
-        .reset_index(name="non_ok_n")
-    )
-    return summary.merge(failures, on=group_cols, how="left").fillna({"non_ok_n": 0})
-
-
-def _framework_matrix(summary: pd.DataFrame, *, model_type: str, target_type: str, value_col: str) -> pd.DataFrame | None:
-    """Build a phase-by-oxide matrix for framework summary values."""
-    phases = ["cpx", "liq"] if model_type == "cpx_liq" else ["cpx"]
-    scope = summary[
-        summary["model_type"].eq(model_type)
-        & summary["target_type"].eq(target_type)
-    ].copy()
-    if scope.empty:
-        return None
-    columns: list[str] = []
-    for phase in phases:
-        phase_cols = _phase_oxide_order(phase, set(scope.loc[scope["phase"].eq(phase), "oxide"].dropna()))
-        columns.extend([col for col in phase_cols if col not in columns])
-    if not columns:
-        return None
-    matrix = pd.DataFrame(index=phases, columns=columns, dtype=float)
-    values = scope.pivot_table(index="phase", columns="oxide", values=value_col, aggfunc="median")
-    for phase in phases:
-        for oxide in columns:
-            if phase in values.index and oxide in values.columns:
-                matrix.loc[phase, oxide] = values.loc[phase, oxide]
-    return matrix
-
-
-def _framework_heat_rgb(value: float, vmin: float, vmax: float, cmap: str) -> tuple[int, int, int]:
-    """Return a compact RGB ramp for framework heatmaps."""
-    if not np.isfinite(value):
-        return (244, 244, 244)
-    span = max(float(vmax) - float(vmin), 1e-12)
-    frac = float(np.clip((float(value) - float(vmin)) / span, 0.0, 1.0))
-    if str(cmap).lower().startswith("orange"):
-        low = np.array([255, 245, 230], dtype=float)
-        high = np.array([217, 72, 1], dtype=float)
-    else:
-        low = np.array([247, 251, 255], dtype=float)
-        high = np.array([8, 81, 156], dtype=float)
-    rgb = low + (high - low) * frac
-    return tuple(int(round(channel)) for channel in rgb)
-
-
-def _plot_framework_matrix(
-    matrix: pd.DataFrame | None,
-    *,
-    title: str,
-    cbar_label: str,
-    output_path: Path,
-    cmap: str = "Blues",
-    vmin: float = 0.0,
-    vmax: float | None = None,
-) -> int:
-    """Plot one framework heatmap matrix."""
-    if matrix is None or matrix.empty:
-        return 0
-    finite = matrix.to_numpy(dtype=float)
-    finite = finite[np.isfinite(finite)]
-    if vmax is None:
-        vmax = float(np.nanmax(finite)) if len(finite) else 1.0
-    if not np.isfinite(vmax) or vmax <= 0:
-        vmax = 1.0
-    fig_width = max(8.5, 0.50 * len(matrix.columns) + 2.0)
-    fig_height = max(2.9, 0.55 * len(matrix.index) + 2.0)
-    scale = 100
-    width = int(fig_width * scale)
-    height = int(fig_height * scale)
-    image = Image.new("RGB", (width, height), (255, 255, 255))
-    draw = ImageDraw.Draw(image)
-    fonts = {
-        "title": _pil_font(23),
-        "axis": _pil_font(15),
-        "tick": _pil_font(14),
-        "label": _pil_font(13),
-    }
-    ink = (20, 20, 20)
-    muted = (70, 70, 70)
-    axis = (115, 115, 115)
-    left = 105
-    right = 145
-    top = 82
-    bottom = 126
-    grid_w = max(120, width - left - right)
-    grid_h = max(42, height - top - bottom)
-    cell_w = grid_w / max(1, len(matrix.columns))
-    cell_h = grid_h / max(1, len(matrix.index))
-
-    title_lines = _wrap_title_lines(draw, title, fonts["title"], width - 48)
-    _, title_line_h = _text_size(draw, "Ag", fonts["title"])
-    title_y = 12
-    for line in title_lines[:2]:
-        line_w, _ = _text_size(draw, line, fonts["title"])
-        draw.text(((width - line_w) // 2, title_y), line, font=fonts["title"], fill=ink)
-        title_y += title_line_h + 3
-
-    values = matrix.to_numpy(dtype=float)
-    for r, phase in enumerate(matrix.index):
-        y0 = top + r * cell_h
-        label = str(phase)
-        lw, lh = _text_size(draw, label, fonts["tick"])
-        draw.text((left - lw - 10, int(y0 + (cell_h - lh) / 2)), label, font=fonts["tick"], fill=ink)
-        for c, _oxide in enumerate(matrix.columns):
-            x0 = left + c * cell_w
-            x1 = left + (c + 1) * cell_w
-            y1 = top + (r + 1) * cell_h
-            value = values[r, c]
-            draw.rectangle(
-                (int(x0), int(y0), int(x1) - 1, int(y1) - 1),
-                fill=_framework_heat_rgb(value, vmin, vmax, cmap),
-                outline=(255, 255, 255),
-            )
-
-    grid_right = left + grid_w
-    grid_bottom = top + grid_h
-    draw.rectangle((left, top, int(grid_right), int(grid_bottom)), outline=axis, width=1)
-    draw.text((18, top + max(0, int((grid_h - 16) / 2))), "Perturbed phase", font=fonts["axis"], fill=muted)
-    for c, oxide in enumerate(matrix.columns):
-        x0 = left + c * cell_w
-        _draw_rotated_text(
-            image,
-            str(oxide),
-            (int(x0 + cell_w / 2 - 8), int(grid_bottom + 8)),
-            fonts["label"],
-            ink,
-            angle=90,
-        )
-
-    bar_x = int(grid_right + 35)
-    bar_y = top
-    bar_w = 18
-    bar_h = int(grid_h)
-    for i in range(max(1, bar_h)):
-        value = float(vmax) - (float(vmax) - float(vmin)) * i / max(1, bar_h - 1)
-        draw.line((bar_x, bar_y + i, bar_x + bar_w, bar_y + i), fill=_framework_heat_rgb(value, vmin, vmax, cmap))
-    draw.rectangle((bar_x, bar_y, bar_x + bar_w, bar_y + bar_h), outline=axis, width=1)
-    for frac, value in [(0.0, vmax), (0.5, (float(vmin) + float(vmax)) / 2), (1.0, vmin)]:
-        y = int(bar_y + frac * bar_h)
-        draw.line((bar_x + bar_w + 3, y, bar_x + bar_w + 11, y), fill=axis, width=1)
-        draw.text((bar_x + bar_w + 15, y - 8), _format_abs_tick(value), font=fonts["tick"], fill=ink)
-    cbar_lines = _wrap_title_lines(draw, cbar_label, fonts["axis"], max(88, width - bar_x - 4))
-    label_y = max(4, bar_y - 46)
-    for line in cbar_lines[:2]:
-        draw.text((bar_x - 4, label_y), line, font=fonts["axis"], fill=ink)
-        label_y += 17
-    image.save(output_path, dpi=(300, 300))
-    return 1
-
-
-def _compose_framework_directional_composite(fig_dir: Path) -> int:
-    """Compose framework effect and switch-rate panels into one summary figure."""
-    rows = [
-        ("cpx_liq", "P"),
-        ("cpx_liq", "T"),
-        ("cpx_only", "P"),
-        ("cpx_only", "T"),
-    ]
-    panel_pairs: list[tuple[Image.Image, Image.Image]] = []
-    for model_type, target_type in rows:
-        effect_path = fig_dir / f"test_subset_framework_final_abs_effect_{model_type}_{target_type}.png"
-        switch_path = fig_dir / f"test_subset_framework_model_switch_rate_{model_type}_{target_type}.png"
-        if not effect_path.exists() or not switch_path.exists():
-            return 0
-        with Image.open(effect_path) as effect_image, Image.open(switch_path) as switch_image:
-            panel_pairs.append((effect_image.convert("RGB").copy(), switch_image.convert("RGB").copy()))
-
-    gap_x = 18
-    gap_y = 18
-    margin_x = 24
-    header_h = 72
-    col_widths = [
-        max(pair[0].width for pair in panel_pairs),
-        max(pair[1].width for pair in panel_pairs),
-    ]
-    row_heights = [max(left.height, right.height) for left, right in panel_pairs]
-    width = margin_x * 2 + col_widths[0] + gap_x + col_widths[1]
-    height = header_h + sum(row_heights) + gap_y * (len(row_heights) - 1) + margin_x
-    composite = Image.new("RGB", (width, height), (255, 255, 255))
-    draw = ImageDraw.Draw(composite)
-    title_font = _pil_font(34)
-    title = "AIMS4PT final-result sensitivity to analytical uncertainty"
-    title_w, _ = _text_size(draw, title, title_font)
-    draw.text(((width - title_w) // 2, 18), title, font=title_font, fill=(20, 20, 20))
-
-    y = header_h
-    for (left, right), row_h in zip(panel_pairs, row_heights):
-        left_x = margin_x + max(0, (col_widths[0] - left.width) // 2)
-        right_x = margin_x + col_widths[0] + gap_x + max(0, (col_widths[1] - right.width) // 2)
-        composite.paste(left, (left_x, y + max(0, (row_h - left.height) // 2)))
-        composite.paste(right, (right_x, y + max(0, (row_h - right.height) // 2)))
-        y += row_h + gap_y
-
-    composite.save(fig_dir / "test_subset_framework_final_sensitivity_composite.png", dpi=(300, 300))
-    return 1
-
-
-def plot_framework_directional_figures(summary: pd.DataFrame, fig_dir: Path) -> int:
-    """Plot final AIMS4PT sensitivity and model-switch rates."""
-    fig_dir.mkdir(parents=True, exist_ok=True)
-    for old_png in fig_dir.glob("test_subset_framework_*.png"):
-        old_png.unlink()
-    count = 0
-    for model_type, label in [("cpx_liq", "cpx-liquid"), ("cpx_only", "cpx-only")]:
-        for target_type, target_label, unit in [("P", "barometry", "kbar"), ("T", "thermometry", "deg C")]:
-            effect_matrix = _framework_matrix(
-                summary,
-                model_type=model_type,
-                target_type=target_type,
-                value_col="median_abs_effect",
-            )
-            count += _plot_framework_matrix(
-                effect_matrix,
-                title=f"AIMS4PT final {target_label} sensitivity: {label}",
-                cbar_label=f"Median abs effect ({unit})",
-                output_path=fig_dir / f"test_subset_framework_final_abs_effect_{model_type}_{target_type}.png",
-                cmap="Blues",
-            )
-            switch_matrix = _framework_matrix(
-                summary,
-                model_type=model_type,
-                target_type=target_type,
-                value_col="any_model_switch_rate_pct",
-            )
-            count += _plot_framework_matrix(
-                switch_matrix,
-                title=f"AIMS4PT selected-model switch rate: {label} {target_type}",
-                cbar_label="Model-switch rate (%)",
-                output_path=fig_dir / f"test_subset_framework_model_switch_rate_{model_type}_{target_type}.png",
-                cmap="Oranges",
-                vmin=0.0,
-                vmax=100.0,
-            )
-    count += _compose_framework_directional_composite(fig_dir)
-    return count
-
-
-def run_framework_directional_analysis(
-    test_df: pd.DataFrame,
-    paths: dict[str, Path],
-    reuse_existing: bool,
-) -> tuple[pd.DataFrame, int]:
-    """Run final AIMS4PT framework-level directional sensitivity analysis."""
-    long_path = paths["framework"] / "framework_directional_oat_long_test_subset.csv"
-    baseline_path = paths["framework"] / "framework_baseline_predictions_test_subset.csv"
-    summary_path = paths["framework"] / "framework_directional_oat_summary_test_subset.csv"
-    overview_path = paths["framework"] / "framework_directional_oat_overview_test_subset.csv"
-    model_specs: list[ModelSpec] | None = None
-    expected_rows = expected_framework_directional_rows_for_targets(test_df)
-    required_cols = {
-        "model_type",
-        "model",
-        "target_type",
-        "phase",
-        "oxide",
-        "plus_prediction",
-        "minus_prediction",
-        "baseline_best_model",
-        "plus_best_model",
-        "minus_best_model",
-        "any_model_switched",
-        "sensitivity_method",
-        "framework_sensitivity_version",
-    }
-
-    def recompute_long_df() -> pd.DataFrame:
-        """Recompute framework rows into a temporary CSV before replacing the final output."""
-        nonlocal model_specs
-        if model_specs is None:
-            model_specs = make_model_specs("cpx_liq") + make_model_specs("cpx_only")
-        temp_path = long_path.with_name(f"{long_path.stem}.tmp.csv")
-        if temp_path.exists():
-            temp_path.unlink()
-        computed = compute_framework_directional_long(
-            test_df,
-            model_specs,
-            baseline_path=baseline_path,
-            out_path=temp_path,
-        )
-        temp_path.replace(long_path)
-        return computed
-
-    if reuse_existing and long_path.exists():
-        candidate = pd.read_csv(long_path, low_memory=False)
-        if (
-            len(candidate) == expected_rows
-            and required_cols.issubset(candidate.columns)
-            and candidate["sensitivity_method"].eq(DIRECTIONAL_SENSITIVITY_METHOD).all()
-            and candidate["framework_sensitivity_version"].eq(FRAMEWORK_SENSITIVITY_VERSION).all()
-        ):
-            long_df = candidate
-            print(f"Reused framework directional OAT results: {long_path}")
-        else:
-            long_df = recompute_long_df()
-    else:
-        long_df = recompute_long_df()
-
-    summary = summarize_framework_directional(long_df)
-    summary.to_csv(summary_path, index=False)
-    overview = (
-        summary.groupby(["model_type", "target_type", "phase"], dropna=False)
-        .agg(
-            oxide_n=("oxide", "nunique"),
-            max_median_abs_effect=("median_abs_effect", "max"),
-            median_median_abs_effect=("median_abs_effect", "median"),
-            max_model_switch_rate_pct=("any_model_switch_rate_pct", "max"),
-            median_model_switch_rate_pct=("any_model_switch_rate_pct", "median"),
-        )
-        .reset_index()
-    )
-    overview.to_csv(overview_path, index=False)
-    fig_count = plot_framework_directional_figures(summary, paths["framework_fig"])
-    return long_df, fig_count
 
 
 def directional_all_oxide_groups(test_df: pd.DataFrame, model_type: str) -> list[tuple[str, str, list[str]]]:
@@ -2898,8 +2086,12 @@ def repair_directional_equal_error_analysis(
 
     summary = summarize_directional_equal_error(repaired)
     summary.to_csv(paths["analytical"] / "directional_equal_error_oat_summary_test_subset.csv", index=False)
-    fig_count = plot_directional_equal_error_figures(repaired, paths["analytical_fig"])
-    fig_count += plot_directional_equal_abs_composites(repaired, paths["analytical_fig"])
+    write_directional_nonzero_oxide_count_tables(repaired, paths["analytical"])
+    plot_df = apply_directional_nonzero_oxide_filter(repaired)
+    fig_count = plot_directional_equal_error_figures(plot_df, paths["analytical_fig"])
+    fig_count += plot_directional_equal_abs_composites(plot_df, paths["analytical_fig"])
+    fig_count += plot_directional_key_feature_abs_composites(plot_df, paths["analytical_fig"], paths["analytical"])
+    fig_count += plot_analytical_uncertainty_maintext_combined(plot_df, paths["analytical_fig"])
     print(
         f"Repaired directional OAT rows for {len(specs)} model-target entries: "
         f"{', '.join(f'{spec.name}/{spec.target_type}' for spec in specs)}",
@@ -3114,6 +2306,8 @@ def plot_directional_equal_error_figures(long_df: pd.DataFrame, fig_dir: Path) -
         if model_type == "cpx_liq":
             liq_order = directional_display_oxide_order("liq", set(scope.loc[scope["phase"].eq("liq"), "oxide"].dropna()))
             feature_order.extend([f"liq:{oxide_base_name(oxide, 'liq')}" for oxide in liq_order])
+        elif "H2O_liq" in set(scope.loc[scope["phase"].eq("liq"), "oxide"].dropna()):
+            feature_order.append("liq:H2O")
 
         matrices = []
         for target_type in ["P", "T"]:
@@ -3215,7 +2409,7 @@ def plot_directional_equal_error_figures(long_df: pd.DataFrame, fig_dir: Path) -
 def _abs_effect_rgb(value: float, vmin: float, vmax: float) -> tuple[int, int, int]:
     """Map an absolute effect to a publication-style sequential blue palette."""
     if not np.isfinite(value):
-        return (238, 238, 238)
+        return (250, 250, 250)
     if not np.isfinite(vmin) or not np.isfinite(vmax):
         return (255, 255, 255)
     span = float(vmax) - float(vmin)
@@ -3307,6 +2501,803 @@ def _abs_effect_matrix(
     values = ok.groupby(["model", "oxide"])["abs_effect"].median().reset_index()
     matrix = values.pivot(index="model", columns="oxide", values="abs_effect")
     return matrix.reindex(index=model_order, columns=oxide_order)
+
+
+def _append_cpx_only_h2o_column(
+    long_df: pd.DataFrame,
+    matrix: pd.DataFrame | None,
+    *,
+    target_type: str,
+) -> pd.DataFrame | None:
+    """Append cpx-only melt H2O sensitivity to the cpx feature matrix."""
+    h2o_matrix = _abs_effect_matrix(
+        long_df,
+        model_type="cpx_only",
+        target_type=target_type,
+        phase="liq",
+    )
+    if h2o_matrix is None or "H2O_liq" not in h2o_matrix.columns:
+        return matrix
+    h2o_col = h2o_matrix[["H2O_liq"]]
+    if matrix is None:
+        return h2o_col
+    model_order = list(dict.fromkeys([*matrix.index.astype(str), *h2o_col.index.astype(str)]))
+    combined = pd.concat(
+        [matrix.reindex(model_order), h2o_col.reindex(model_order)],
+        axis=1,
+    )
+    return combined
+
+
+def apply_directional_nonzero_oxide_filter(long_df: pd.DataFrame) -> pd.DataFrame:
+    """Mask baseline-zero oxide rows so final medians are computed only from present oxides."""
+    out = long_df.copy()
+    baseline = pd.to_numeric(out["baseline_value"], errors="coerce").fillna(0.0)
+    zero_mask = baseline.eq(0.0)
+    out["oxide_nonzero_filter"] = ~zero_mask
+    out.loc[zero_mask, "status"] = "filtered_zero_oxide"
+    out.loc[zero_mask, ["signed_effect", "abs_effect"]] = np.nan
+    return out
+
+
+def write_directional_nonzero_oxide_count_tables(long_df: pd.DataFrame, out_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Write sample-count diagnostics for the nonzero-oxide plotting filter."""
+    scoped = long_df.copy()
+    baseline = pd.to_numeric(scoped["baseline_value"], errors="coerce").fillna(0.0)
+    scoped["oxide_nonzero_filter"] = baseline.ne(0.0)
+    scoped["ok_for_plot"] = (
+        scoped["oxide_nonzero_filter"] & scoped["status"].eq("ok") & scoped["abs_effect"].notna()
+    )
+    scoped["nonzero_id"] = scoped["id"].where(scoped["oxide_nonzero_filter"])
+    scoped["zero_id"] = scoped["id"].where(~scoped["oxide_nonzero_filter"])
+    scoped["plot_ok_id"] = scoped["id"].where(scoped["ok_for_plot"])
+    scoped["non_ok_after_nonzero"] = scoped["oxide_nonzero_filter"] & ~scoped["ok_for_plot"]
+    scoped["abs_effect_for_plot"] = scoped["abs_effect"].where(scoped["ok_for_plot"])
+
+    group_cols = ["model_type", "target_type", "phase", "oxide", "storage_oxide", "model"]
+    by_model = (
+        scoped.groupby(group_cols, dropna=False)
+        .agg(
+            total_sample_n=("id", "nunique"),
+            nonzero_sample_n=("nonzero_id", "nunique"),
+            zero_sample_n=("zero_id", "nunique"),
+            plot_ok_n=("plot_ok_id", "nunique"),
+            non_ok_after_nonzero_n=("non_ok_after_nonzero", "sum"),
+            median_abs_effect=("abs_effect_for_plot", "median"),
+            p95_abs_effect=("abs_effect_for_plot", lambda values: values.quantile(0.95)),
+            max_abs_effect=("abs_effect_for_plot", "max"),
+        )
+        .reset_index()
+    )
+
+    oxide_cols = ["model_type", "target_type", "phase", "oxide", "storage_oxide"]
+    by_oxide = (
+        by_model.groupby(oxide_cols, dropna=False)
+        .agg(
+            model_n=("model", "nunique"),
+            total_sample_n=("total_sample_n", "max"),
+            nonzero_sample_n=("nonzero_sample_n", "max"),
+            zero_sample_n=("zero_sample_n", "max"),
+            min_plot_ok_n=("plot_ok_n", "min"),
+            median_plot_ok_n=("plot_ok_n", "median"),
+            max_plot_ok_n=("plot_ok_n", "max"),
+            total_non_ok_after_nonzero_n=("non_ok_after_nonzero_n", "sum"),
+            max_median_abs_effect=("median_abs_effect", "max"),
+            max_p95_abs_effect=("p95_abs_effect", "max"),
+        )
+        .reset_index()
+    )
+    by_oxide["low_n_flag"] = np.where(by_oxide["min_plot_ok_n"] < 10, "min_ok_n_lt_10", "")
+
+    by_model.to_csv(out_dir / "directional_pm_abs_nonzero_oxide_counts_by_model_test_subset.csv", index=False)
+    by_oxide.to_csv(out_dir / "directional_pm_abs_nonzero_oxide_counts_by_oxide_test_subset.csv", index=False)
+    return by_model, by_oxide
+
+
+def directional_key_features() -> dict[tuple[str, str, str], set[str]]:
+    """Return the key features to mark in the final directional analytical figures."""
+    return {
+        # Clinopyroxene-only pressure
+        ("cpx_only", "P", "Pet20"): {"Na2O_cpx", "Al2O3_cpx", "CaO_cpx"},
+        ("cpx_only", "P", "Hig21"): {"Al2O3_cpx", "CaO_cpx", "Na2O_cpx", "MgO_cpx"},
+        ("cpx_only", "P", "Jor22"): {"Al2O3_cpx", "Na2O_cpx", "CaO_cpx"},
+        ("cpx_only", "P", "AgL24"): {"Al2O3_cpx", "Na2O_cpx", "CaO_cpx"},
+        ("cpx_only", "P", "Wan21"): {"CaO_cpx", "FeOt_cpx", "Al2O3_cpx", "TiO2_cpx"},
+        ("cpx_only", "P", "Chi23"): {"CaO_cpx", "SiO2_cpx", "Al2O3_cpx", "FeOt_cpx"},
+        # Pu08_32b is a hydrous cpx-only pressure equation; mark the required melt-water input.
+        ("cpx_only", "P", "Pu08_32b"): {"H2O_liq"},
+        # Clinopyroxene-liquid pressure
+        ("cpx_liq", "P", "NP17"): {"Na2O_cpx", "CaO_cpx", "Al2O3_liq", "SiO2_liq", "K2O_liq"},
+        ("cpx_liq", "P", "Pet20"): {"Na2O_cpx", "Al2O3_cpx", "MgO_liq", "CaO_cpx"},
+        ("cpx_liq", "P", "Jor22"): {"Al2O3_cpx", "Na2O_cpx", "MgO_liq", "CaO_cpx"},
+        ("cpx_liq", "P", "AgL24"): {"Al2O3_cpx", "MgO_liq", "Na2O_cpx", "CaO_cpx"},
+        ("cpx_liq", "P", "Chi23"): {
+            "K2O_liq",
+            "CaO_cpx",
+            "SiO2_cpx",
+            "CaO_liq",
+            "Al2O3_cpx",
+            "Al2O3_liq",
+        },
+        # Clinopyroxene-only temperature
+        ("cpx_only", "T", "Pet20"): {"CaO_cpx", "MgO_cpx", "MnO_cpx", "Al2O3_cpx", "Cr2O3_cpx"},
+        ("cpx_only", "T", "Hig21"): {"MgO_cpx", "CaO_cpx", "MnO_cpx", "Al2O3_cpx"},
+        ("cpx_only", "T", "Jor22"): {"CaO_cpx", "MgO_cpx", "Al2O3_cpx", "FeOt_cpx"},
+        ("cpx_only", "T", "AgL24"): {"CaO_cpx", "MgO_cpx", "Al2O3_cpx", "FeOt_cpx"},
+        ("cpx_only", "T", "Wan21"): {"FeOt_cpx", "H2O_liq", "CaO_cpx", "TiO2_cpx"},
+        ("cpx_only", "T", "Chi23"): {
+            "CaO_cpx",
+            "SiO2_cpx",
+            "Na2O_cpx",
+            "Al2O3_cpx",
+            "MgO_cpx",
+        },
+        # Clinopyroxene-liquid temperature
+        ("cpx_liq", "T", "Pet20"): {"MgO_liq", "H2O_liq", "CaO_cpx", "Na2O_cpx", "CaO_liq", "Al2O3_cpx"},
+        ("cpx_liq", "T", "Jor22"): {"MgO_liq", "CaO_cpx", "Na2O_cpx", "SiO2_liq", "Al2O3_cpx"},
+        ("cpx_liq", "T", "AgL24"): {"MgO_liq", "CaO_cpx", "Al2O3_cpx", "Na2O_cpx", "Al2O3_liq"},
+        ("cpx_liq", "T", "Chi23"): {"K2O_liq", "CaO_liq", "MgO_cpx", "Na2O_cpx", "FeOt_cpx", "MgO_liq"},
+    }
+
+
+def _abs_heatmap_grid_geometry(matrix: pd.DataFrame | None, title: str) -> tuple[int, int, int, int]:
+    """Return grid geometry matching _make_abs_heatmap_panel."""
+    cell_w = 52
+    cell_h = 44
+    left_w = 122
+    right_w = 150
+    min_cols = 10
+    has_title = bool(str(title).strip())
+    top_h = 106 if has_title else 40
+    cols = min_cols if matrix is None or matrix.empty else max(min_cols, len(matrix.columns))
+    draw_cols = cols if matrix is None or matrix.empty else len(matrix.columns)
+    grid_w = cols * cell_w
+    width = max(left_w + grid_w + right_w, 760)
+    content_w = left_w + draw_cols * cell_w + right_w
+    grid_x = max(0, (width - content_w) // 2) + left_w
+    return grid_x, top_h, cell_w, cell_h
+
+
+def _draw_directional_key_feature_boxes(
+    panel: Image.Image,
+    matrix: pd.DataFrame | None,
+    *,
+    model_type: str,
+    target_type: str,
+    phase: str,
+    title: str,
+    features: dict[tuple[str, str, str], set[str]],
+) -> list[dict[str, object]]:
+    """Draw red boxes around key-feature cells and return their metadata."""
+    if matrix is None or matrix.empty:
+        return []
+    draw = ImageDraw.Draw(panel)
+    grid_x, grid_y, cell_w, cell_h = _abs_heatmap_grid_geometry(matrix, title)
+    rows: list[dict[str, object]] = []
+    box_color = (238, 126, 110)
+    for r, model in enumerate(matrix.index.astype(str)):
+        feature_set = features.get((model_type, target_type, model), set())
+        for c, oxide in enumerate(matrix.columns.astype(str)):
+            if oxide not in feature_set:
+                continue
+            x0 = grid_x + c * cell_w
+            y0 = grid_y + r * cell_h
+            draw.rectangle((x0 + 1, y0 + 1, x0 + cell_w - 3, y0 + cell_h - 3), outline=box_color, width=4)
+            rows.append(
+                {
+                    "model_type": model_type,
+                    "target_type": target_type,
+                    "phase": "liq" if oxide.endswith("_liq") else phase,
+                    "model": model,
+                    "oxide": oxide,
+                }
+            )
+    return rows
+
+
+def summarize_directional_key_feature_box_counts(
+    plot_df: pd.DataFrame,
+    box_rows: list[dict[str, object]],
+) -> pd.DataFrame:
+    """Attach sample counts and effect summaries to each drawn key-feature box."""
+    if not box_rows:
+        return pd.DataFrame()
+    records: list[dict[str, object]] = []
+    for row in box_rows:
+        scope = plot_df[
+            plot_df["model_type"].eq(row["model_type"])
+            & plot_df["target_type"].eq(row["target_type"])
+            & plot_df["phase"].eq(row["phase"])
+            & plot_df["model"].eq(row["model"])
+            & plot_df["oxide"].eq(row["oxide"])
+        ].copy()
+        baseline = pd.to_numeric(scope["baseline_value"], errors="coerce").fillna(0.0)
+        nonzero = baseline.ne(0.0)
+        ok = nonzero & scope["status"].eq("ok") & scope["abs_effect"].notna()
+        values = scope.loc[ok, "abs_effect"]
+        records.append(
+            {
+                **row,
+                "total_sample_n": int(scope["id"].nunique()),
+                "nonzero_sample_n": int(scope.loc[nonzero, "id"].nunique()),
+                "plot_ok_n": int(scope.loc[ok, "id"].nunique()),
+                "non_ok_after_nonzero_n": int((nonzero & ~ok).sum()),
+                "median_abs_effect": values.median(),
+                "p95_abs_effect": values.quantile(0.95),
+                "max_abs_effect": values.max(),
+            }
+        )
+    return pd.DataFrame(records)
+
+
+def _maintext_model_order(long_df: pd.DataFrame, model_type: str, target_type: str) -> list[str]:
+    """Return manuscript-facing model order for one model group and target."""
+    preferred = {
+        "cpx_only": [
+            "Pu08_32a",
+            "Pu08_32b",
+            "Pu08_32d",
+            "Pet20",
+            "Hig21",
+            "Jor22",
+            "AgL24",
+            "Wan21",
+            "Chi23",
+        ],
+        "cpx_liq": ["Pu08_31", "Pu08_33", "NP17", "Pet20", "Jor22", "AgL24", "Chi23"],
+    }
+    scope = long_df[long_df["model_type"].eq(model_type) & long_df["target_type"].eq(target_type)]
+    available = list(dict.fromkeys(scope["model"].dropna().astype(str)))
+    ordered = [model for model in preferred.get(model_type, []) if model in available]
+    ordered.extend([model for model in available if model not in set(ordered)])
+    return ordered
+
+
+def _maintext_feature_specs(model_type: str, phase: str) -> list[tuple[str, str]]:
+    """Return feature specs as (source_phase, displayed_oxide) for one manuscript panel."""
+    if phase == "cpx":
+        specs = [("cpx", display_oxide_name(f"{base}_cpx", "cpx")) for base in DIRECTIONAL_CPX_BASE_ORDER]
+        if model_type == "cpx_only":
+            specs.append(("liq", "H2O_liq"))
+        return specs
+    return [("liq", display_oxide_name(f"{base}_liq", "liq")) for base in DIRECTIONAL_LIQ_BASE_ORDER]
+
+
+def _maintext_chemical_label(oxide: str, *, h2o_star: bool = False) -> str:
+    """Return a compact oxide label token for custom chemical rendering."""
+    labels = {
+        "SiO2": "SiO2",
+        "TiO2": "TiO2",
+        "Al2O3": "Al2O3",
+        "FeOt": "FeOt",
+        "MgO": "MgO",
+        "MnO": "MnO",
+        "CaO": "CaO",
+        "Na2O": "Na2O",
+        "Cr2O3": "Cr2O3",
+        "K2O": "K2O",
+        "H2O": "H2O",
+    }
+    base = oxide_base_name(oxide, "liq" if str(oxide).endswith("_liq") else "cpx")
+    label = labels.get(base, base)
+    return f"{label}*" if h2o_star and base == "H2O" else label
+
+
+def _maintext_model_label(model: str) -> str:
+    """Format compact model labels for display."""
+    return str(model).replace("_", "-")
+
+
+def _maintext_feature_set(phase: str, bases: list[str]) -> set[str]:
+    """Return displayed feature names for the explicit main-text feature table."""
+    return {display_oxide_name(f"{base}_{phase}", phase) for base in bases}
+
+
+@lru_cache(maxsize=1)
+def _maintext_model_spec_lookup() -> dict[tuple[str, str, str], ModelSpec]:
+    """Return model specs keyed by (model_type, target_type, model label)."""
+    specs = make_model_specs("cpx_liq") + make_model_specs("cpx_only")
+    return {(spec.model_type, spec.target_type, spec.name): spec for spec in specs}
+
+
+def _maintext_features_from_model_metadata(
+    model_type: str,
+    target_type: str,
+    model: str,
+    phase: str,
+) -> set[str] | None:
+    """Infer plotted features from model.standard_columns and require_water."""
+    spec = _maintext_model_spec_lookup().get((model_type, target_type, model))
+    if spec is None:
+        return None
+
+    suffix = f"_{phase}"
+    features: set[str] = set()
+    for column in getattr(spec.model, "standard_columns", []) or []:
+        column_text = str(column)
+        if not column_text.endswith(suffix):
+            continue
+        base = oxide_base_name(column_text, phase)
+        features.add(display_oxide_name(f"{base}_{phase}", phase))
+
+    if phase == "liq" and bool(getattr(spec.model, "require_water", False)):
+        features.add("H2O_liq")
+    return features
+
+
+def _maintext_declared_features(
+    model_type: str,
+    target_type: str,
+    model: str,
+    phase: str,
+) -> tuple[bool, set[str] | None]:
+    """Return workbook-declared features used for main-text unused-cell masking.
+
+    The boolean indicates whether the model-target entry exists in the table.
+    A None feature set in the manual table means "N.A. in workbook"; for those
+    entries, fall back to model.standard_columns plus require_water.
+    An empty set means the model has no declared inputs from that phase.
+    """
+    cpx_all = _maintext_feature_set("cpx", ["SiO2", "TiO2", "Al2O3", "FeO", "MnO", "MgO", "CaO", "Na2O", "K2O", "Cr2O3"])
+    cpx_no_k = _maintext_feature_set("cpx", ["SiO2", "TiO2", "Al2O3", "FeO", "MnO", "MgO", "CaO", "Na2O", "Cr2O3"])
+    liq_all_plot = _maintext_feature_set("liq", ["SiO2", "TiO2", "Al2O3", "FeO", "MnO", "MgO", "CaO", "Na2O", "K2O", "H2O"])
+    liq_no_h2o = _maintext_feature_set("liq", ["SiO2", "TiO2", "Al2O3", "FeO", "MnO", "MgO", "CaO", "Na2O", "K2O"])
+    h2o_only = {"H2O_liq"}
+
+    table: dict[tuple[str, str, str], dict[str, set[str] | None]] = {
+        ("cpx_only", "P", "Pu08_32a"): {"cpx": None, "liq": set()},
+        ("cpx_only", "P", "Pu08_32b"): {"cpx": None, "liq": h2o_only},
+        ("cpx_only", "T", "Pu08_32d"): {"cpx": None, "liq": set()},
+        ("cpx_liq", "P", "Pu08_31"): {"cpx": None, "liq": None},
+        ("cpx_liq", "T", "Pu08_33"): {"cpx": None, "liq": None},
+        ("cpx_liq", "P", "NP17"): {"cpx": cpx_all, "liq": liq_all_plot},
+    }
+
+    for target in ("P", "T"):
+        table[("cpx_only", target, "Pet20")] = {"cpx": cpx_all, "liq": set()}
+        table[("cpx_only", target, "Wan21")] = {"cpx": cpx_all, "liq": h2o_only}
+        table[("cpx_only", target, "Hig21")] = {"cpx": cpx_no_k, "liq": set()}
+        table[("cpx_only", target, "Jor22")] = {"cpx": cpx_no_k, "liq": set()}
+        table[("cpx_only", target, "Chi23")] = {"cpx": cpx_all, "liq": set()}
+        table[("cpx_only", target, "AgL24")] = {"cpx": cpx_no_k, "liq": set()}
+
+        table[("cpx_liq", target, "Pet20")] = {"cpx": cpx_all, "liq": liq_all_plot}
+        table[("cpx_liq", target, "Jor22")] = {"cpx": cpx_no_k, "liq": liq_no_h2o}
+        table[("cpx_liq", target, "Chi23")] = {"cpx": cpx_all, "liq": liq_no_h2o}
+        table[("cpx_liq", target, "AgL24")] = {"cpx": cpx_no_k, "liq": liq_no_h2o}
+
+    entry = table.get((model_type, target_type, model))
+    if entry is None:
+        return False, None
+    feature_set = entry.get(phase)
+    if feature_set is None:
+        feature_set = _maintext_features_from_model_metadata(model_type, target_type, model, phase)
+    return True, feature_set
+
+
+def _series_to_bool(series: pd.Series) -> pd.Series:
+    """Coerce CSV-loaded boolean-like values to bool."""
+    if series.dtype == bool:
+        return series
+    return series.astype(str).str.strip().str.lower().isin({"true", "1", "yes"})
+
+
+def _maintext_effect_and_unused_matrices(
+    long_df: pd.DataFrame,
+    *,
+    model_type: str,
+    target_type: str,
+    feature_specs: list[tuple[str, str]],
+    model_order: list[str],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Build median-effect and unused-feature matrices for one manuscript panel."""
+    feature_columns = [oxide for _, oxide in feature_specs]
+    values = pd.DataFrame(np.nan, index=model_order, columns=feature_columns, dtype=float)
+    unused = pd.DataFrame(False, index=model_order, columns=feature_columns, dtype=bool)
+
+    for source_phase, oxide in feature_specs:
+        for model in model_order:
+            declared, feature_set = _maintext_declared_features(model_type, target_type, model, source_phase)
+            if declared and feature_set is not None:
+                unused.loc[model, oxide] = oxide not in feature_set
+
+        scope = long_df[
+            long_df["model_type"].eq(model_type)
+            & long_df["target_type"].eq(target_type)
+            & long_df["phase"].eq(source_phase)
+            & long_df["oxide"].eq(oxide)
+        ].copy()
+        if scope.empty:
+            continue
+
+        ok = scope[scope["status"].eq("ok")].copy()
+        if not ok.empty:
+            medians = ok.groupby("model")["abs_effect"].median()
+            for model, value in medians.items():
+                if model in values.index:
+                    values.loc[model, oxide] = float(value)
+
+    values = values.mask(unused)
+    return values, unused
+
+
+def _maintext_mpl_cmap() -> LinearSegmentedColormap:
+    """Return the sequential blue colormap used by the main-text heatmap."""
+    colors = [
+        (255 / 255, 255 / 255, 255 / 255),
+        (239 / 255, 245 / 255, 255 / 255),
+        (198 / 255, 219 / 255, 239 / 255),
+        (107 / 255, 174 / 255, 214 / 255),
+        (49 / 255, 130 / 255, 189 / 255),
+        (8 / 255, 81 / 255, 156 / 255),
+    ]
+    cmap = LinearSegmentedColormap.from_list("aims4pt_maintext_blues", colors)
+    cmap.set_bad("#fafafa")
+    return cmap
+
+
+def _maintext_mpl_chemical_label(oxide: str, *, h2o_star: bool = False) -> str:
+    """Return a matplotlib mathtext label with chemical subscripts."""
+    base = oxide_base_name(oxide, "liq" if str(oxide).endswith("_liq") else "cpx")
+    labels = {
+        "SiO2": r"SiO$_2$",
+        "TiO2": r"TiO$_2$",
+        "Al2O3": r"Al$_2$O$_3$",
+        "FeOt": "FeOt",
+        "MgO": "MgO",
+        "MnO": "MnO",
+        "CaO": "CaO",
+        "Na2O": r"Na$_2$O",
+        "Cr2O3": r"Cr$_2$O$_3$",
+        "K2O": r"K$_2$O",
+        "H2O": r"H$_2$O",
+    }
+    label = labels.get(base, base)
+    return f"{label}*" if h2o_star and base == "H2O" else label
+
+
+def _render_formula_label(
+    text: str,
+    *,
+    font: ImageFont.ImageFont,
+    sub_font: ImageFont.ImageFont,
+    fill: tuple[int, int, int],
+) -> Image.Image:
+    """Render a chemical label with digit characters drawn as subscripts."""
+    measure = ImageDraw.Draw(Image.new("RGBA", (1, 1), (255, 255, 255, 0)))
+    sub_offset = 9
+    padding = 4
+    width = padding * 2
+    normal_h = _text_size(measure, "Ag", font)[1]
+    for char in str(text):
+        char_font = sub_font if char.isdigit() else font
+        width += _text_size(measure, char, char_font)[0]
+    height = normal_h + sub_offset + padding * 2
+    image = Image.new("RGBA", (max(1, width), max(1, height)), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(image)
+    x = padding
+    for char in str(text):
+        if char.isdigit():
+            char_font = sub_font
+            y = padding + sub_offset
+        else:
+            char_font = font
+            y = padding
+        draw.text((x, y), char, font=char_font, fill=fill)
+        x += _text_size(draw, char, char_font)[0]
+    return image
+
+
+def _draw_rotated_formula_label(
+    image: Image.Image,
+    text: str,
+    xy: tuple[int, int],
+    *,
+    font: ImageFont.ImageFont,
+    sub_font: ImageFont.ImageFont,
+    fill: tuple[int, int, int],
+    angle: int = 45,
+) -> None:
+    """Draw a rotated chemical formula label without relying on Unicode subscripts."""
+    label_image = _render_formula_label(text, font=font, sub_font=sub_font, fill=fill)
+    resampling = getattr(Image, "Resampling", Image).BICUBIC
+    rotated = label_image.rotate(angle, expand=True, resample=resampling)
+    image.paste(rotated, xy, rotated)
+
+
+def _draw_maintext_pil_colorbar(
+    image: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    *,
+    x: int,
+    y: int,
+    height: int,
+    vmax: float,
+    label: str,
+    fonts: dict[str, ImageFont.ImageFont],
+) -> None:
+    """Draw a compact panel-specific vertical colorbar."""
+    bar_w = 13
+    for i in range(height):
+        value = float(vmax) - float(vmax) * i / max(1, height - 1)
+        draw.line((x, y + i, x + bar_w, y + i), fill=_abs_effect_rgb(value, 0.0, vmax))
+    draw.rectangle((x, y, x + bar_w, y + height), outline=(130, 130, 130), width=1)
+    for frac, value in [(0.0, vmax), (0.5, vmax / 2), (1.0, 0.0)]:
+        yy = int(y + frac * height)
+        draw.line((x + bar_w + 3, yy, x + bar_w + 9, yy), fill=(100, 100, 100), width=1)
+        tick = _format_abs_tick(value)
+        draw.text((x + bar_w + 12, yy - 8), tick, font=fonts["tick"], fill=(35, 35, 35))
+    _draw_rotated_text(
+        image,
+        label,
+        (x + bar_w + 45, y + max(0, (height - 205) // 2)),
+        fonts["cbar"],
+        (25, 25, 25),
+        angle=90,
+    )
+
+
+def _draw_maintext_pil_panel(
+    image: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    *,
+    x: int,
+    y: int,
+    values: pd.DataFrame,
+    unused: pd.DataFrame,
+    xlabels: list[str],
+    panel_label: str,
+    unit: str,
+    fonts: dict[str, ImageFont.ImageFont],
+    cell_w: int,
+    cell_h: int,
+    colorbar_cols: int,
+    model_type: str,
+    target_type: str,
+) -> None:
+    """Draw one PIL heatmap panel for the main-text analytical figure."""
+    arr = values.to_numpy(dtype=float)
+    finite = arr[np.isfinite(arr)]
+    vmax = float(np.nanmax(finite)) if len(finite) else 1.0
+    if not np.isfinite(vmax) or vmax <= 0:
+        vmax = 1.0
+
+    n_rows, n_cols = arr.shape
+    label_w = 120
+    grid_x = x + label_w
+    grid_y = y
+    grid_w = n_cols * cell_w
+    grid_h = n_rows * cell_h
+    ink = (20, 20, 20)
+    axis = (175, 175, 175)
+    unused_fill = (221, 221, 221)
+    box_color = (238, 126, 110)
+    key_features = directional_key_features()
+
+    draw.text((x - 26, y - 24), panel_label, font=fonts["panel"], fill=ink)
+    for row_i in range(n_rows):
+        model = str(values.index[row_i])
+        model_label = _maintext_model_label(model)
+        mw, mh = _text_size(draw, model_label, fonts["model"])
+        draw.text((grid_x - mw - 8, grid_y + row_i * cell_h + (cell_h - mh) // 2), model_label, font=fonts["model"], fill=ink)
+        feature_set = key_features.get((model_type, target_type, model), set())
+        for col_i, oxide in enumerate(values.columns):
+            x0 = grid_x + col_i * cell_w
+            y0 = grid_y + row_i * cell_h
+            x1 = x0 + cell_w - 1
+            y1 = y0 + cell_h - 1
+            if bool(unused.iat[row_i, col_i]):
+                fill = unused_fill
+            else:
+                fill = _abs_effect_rgb(arr[row_i, col_i], 0.0, vmax)
+            draw.rectangle((x0, y0, x1, y1), fill=fill, outline=(255, 255, 255), width=1)
+            if oxide in feature_set:
+                draw.rectangle((x0 + 2, y0 + 2, x1 - 2, y1 - 2), outline=box_color, width=3)
+
+    draw.rectangle((grid_x, grid_y, grid_x + grid_w, grid_y + grid_h), outline=axis, width=1)
+    for col_i, label in enumerate(xlabels):
+        tx = grid_x + col_i * cell_w + 5
+        ty = grid_y + grid_h + 9
+        _draw_rotated_formula_label(
+            image,
+            label,
+            (tx, ty),
+            font=fonts["xlabel"],
+            sub_font=fonts["xlabel_sub"],
+            fill=ink,
+            angle=45,
+        )
+    _draw_maintext_pil_colorbar(
+        image,
+        draw,
+        x=grid_x + colorbar_cols * cell_w + 20,
+        y=grid_y,
+        height=grid_h,
+        vmax=vmax,
+        label=f"Median absolute effect ({unit})",
+        fonts=fonts,
+    )
+
+
+def _draw_maintext_mpl_panel(
+    fig: plt.Figure,
+    ax: plt.Axes,
+    *,
+    values: pd.DataFrame,
+    unused: pd.DataFrame,
+    xlabels: list[str],
+    panel_label: str,
+    unit: str,
+    cmap: LinearSegmentedColormap,
+    model_type: str,
+    target_type: str,
+) -> None:
+    """Draw one matplotlib heatmap panel for the main-text analytical figure."""
+    arr = values.to_numpy(dtype=float)
+    finite = arr[np.isfinite(arr)]
+    vmax = float(np.nanmax(finite)) if len(finite) else 1.0
+    if not np.isfinite(vmax) or vmax <= 0:
+        vmax = 1.0
+
+    masked = np.ma.masked_invalid(arr)
+    im = ax.imshow(masked, cmap=cmap, vmin=0.0, vmax=vmax, aspect="auto", interpolation="none")
+
+    n_rows, n_cols = arr.shape
+    unused_arr = unused.to_numpy(dtype=float)
+    unused_arr[~unused.to_numpy(dtype=bool)] = np.nan
+    if np.isfinite(unused_arr).any():
+        unused_cmap = LinearSegmentedColormap.from_list("unused_gray", ["#dddddd", "#dddddd"])
+        ax.imshow(
+            np.ma.masked_invalid(unused_arr),
+            cmap=unused_cmap,
+            vmin=0.0,
+            vmax=1.0,
+            aspect="auto",
+            interpolation="none",
+            zorder=3,
+        )
+
+    key_features = directional_key_features()
+    box_color = "#ee7e6e"
+    for row_i, model in enumerate(values.index):
+        feature_set = key_features.get((model_type, target_type, str(model)), set())
+        for col_i, oxide in enumerate(values.columns):
+            if oxide not in feature_set:
+                continue
+            x0 = col_i - 0.5 + 0.035
+            x1 = col_i + 0.5 - 0.035
+            y0 = row_i - 0.5 + 0.035
+            y1 = row_i + 0.5 - 0.035
+            ax.plot(
+                [x0, x1, x1, x0, x0],
+                [y0, y0, y1, y1, y0],
+                color=box_color,
+                linewidth=1.35,
+                solid_capstyle="butt",
+                zorder=4,
+            )
+
+    ax.set_xticks(np.arange(n_cols))
+    ax.set_xticklabels(xlabels, rotation=45, ha="right", rotation_mode="anchor", fontsize=8.5)
+    ax.set_yticks(np.arange(n_rows))
+    ax.set_yticklabels([_maintext_model_label(model) for model in values.index], fontsize=8.5)
+    ax.set_xlim(-0.5, n_cols - 0.5)
+    ax.set_ylim(n_rows - 0.5, -0.5)
+    ax.tick_params(axis="both", length=0)
+
+    ax.set_xticks(np.arange(-0.5, n_cols, 1), minor=True)
+    ax.set_yticks(np.arange(-0.5, n_rows, 1), minor=True)
+    ax.grid(which="minor", color="white", linewidth=0.6)
+    ax.tick_params(which="minor", bottom=False, left=False)
+    for spine in ax.spines.values():
+        spine.set_linewidth(0.45)
+        spine.set_color("#9a9a9a")
+
+    ax.text(-0.23, 1.06, panel_label, transform=ax.transAxes, fontsize=11, fontweight="bold", va="bottom", ha="left")
+
+    cbar = fig.colorbar(im, ax=ax, fraction=0.030, pad=0.035)
+    cbar.set_ticks([0.0, vmax / 2, vmax])
+    cbar.ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda value, _pos: _format_abs_tick(value)))
+    cbar.ax.tick_params(labelsize=7.5, length=2, pad=1)
+    cbar.outline.set_linewidth(0.35)
+    cbar.set_label(f"Median absolute effect ({unit})", fontsize=8, labelpad=5)
+
+
+def plot_analytical_uncertainty_maintext_combined(long_df: pd.DataFrame, fig_dir: Path) -> int:
+    """Create the final 3x2 main-text analytical-uncertainty heatmap."""
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    output_stem = fig_dir / "analytical_uncertainty_maintext_combined"
+
+    panel_specs = [
+        ("cpx_only", "P", "cpx", "a"),
+        ("cpx_only", "T", "cpx", "b"),
+        ("cpx_liq", "P", "cpx", "c"),
+        ("cpx_liq", "T", "cpx", "d"),
+        ("cpx_liq", "P", "liq", "e"),
+        ("cpx_liq", "T", "liq", "f"),
+    ]
+    fonts = {
+        "group": _pil_font(33, bold=True),
+        "column": _pil_font(27, bold=True),
+        "row": _pil_font(23, bold=True),
+        "panel": _pil_font(30, bold=True),
+        "model": _pil_font(20),
+        "xlabel": _pil_font(19),
+        "xlabel_sub": _pil_font(13),
+        "tick": _pil_font(16),
+        "cbar": _pil_font(17),
+    }
+
+    cell_w = 52
+    cell_h = 34
+    colorbar_cols = len(_maintext_feature_specs("cpx_only", "cpx"))
+    panel_w = 800
+    left_x = 145
+    gap_x = 50
+    right_x = left_x + panel_w + gap_x
+    row_tops = [135, 560, 880]
+    width = 1820
+    height = 1215
+    image = Image.new("RGB", (width, height), (255, 255, 255))
+    draw = ImageDraw.Draw(image)
+    ink = (20, 20, 20)
+
+    label_w = 120
+    grid_w_max = colorbar_cols * cell_w
+    left_center = left_x + label_w + grid_w_max // 2
+    right_center = right_x + label_w + grid_w_max // 2
+    group_center = (left_center + right_center) // 2
+
+    draw.text((left_center, 78), "Barometry", font=fonts["column"], fill=ink, anchor="mm")
+    draw.text((right_center, 78), "Thermometry", font=fonts["column"], fill=ink, anchor="mm")
+    draw.text((group_center, 32), "Clinopyroxene-only models", font=fonts["group"], fill=ink, anchor="mm")
+    draw.text((group_center, 522), "Clinopyroxene-liquid models", font=fonts["group"], fill=ink, anchor="mm")
+    _draw_rotated_text(image, "Clinopyroxene", (42, row_tops[1] + 105), fonts["row"], ink, angle=90)
+    _draw_rotated_text(image, "Liquid", (42, row_tops[2] + 100), fonts["row"], ink, angle=90)
+
+    positions = [
+        (left_x, row_tops[0]),
+        (right_x, row_tops[0]),
+        (left_x, row_tops[1]),
+        (right_x, row_tops[1]),
+        (left_x, row_tops[2]),
+        (right_x, row_tops[2]),
+    ]
+    for (model_type, target_type, phase, panel_label), (x, y) in zip(panel_specs, positions):
+        feature_specs = _maintext_feature_specs(model_type, phase)
+        model_order = _maintext_model_order(long_df, model_type, target_type)
+        values, unused = _maintext_effect_and_unused_matrices(
+            long_df,
+            model_type=model_type,
+            target_type=target_type,
+            feature_specs=feature_specs,
+            model_order=model_order,
+        )
+        xlabels = [
+            _maintext_chemical_label(oxide, h2o_star=(model_type == "cpx_only" and oxide == "H2O_liq"))
+            for _, oxide in feature_specs
+        ]
+        _draw_maintext_pil_panel(
+            image,
+            draw,
+            x=x,
+            y=y,
+            values=values,
+            unused=unused,
+            xlabels=xlabels,
+            panel_label=panel_label,
+            unit="kbar" if target_type == "P" else "°C",
+            model_type=model_type,
+            target_type=target_type,
+            fonts=fonts,
+            cell_w=cell_w,
+            cell_h=cell_h,
+            colorbar_cols=colorbar_cols,
+        )
+
+    image.save(output_stem.with_suffix(".png"), dpi=(300, 300))
+    image.save(output_stem.with_suffix(".pdf"), "PDF", resolution=300.0)
+    return 2
 
 
 def _draw_abs_colorbar(
@@ -3703,11 +3694,17 @@ def plot_directional_equal_abs_composites(long_df: pd.DataFrame, fig_dir: Path) 
                 target_type=target_type,
                 phase=phase,
             )
+            if model_type == "cpx_only" and phase == "cpx":
+                matrix = _append_cpx_only_h2o_column(long_df, matrix, target_type=target_type)
             if matrix is None:
                 continue
-            phase_label = "Clinopyroxene" if phase == "cpx" else "Liquid"
+            if model_type == "cpx_only" and phase == "cpx" and "H2O_liq" in matrix.columns:
+                input_label = "Clinopyroxene Compositions and Melt H2O"
+            else:
+                phase_label = "Clinopyroxene" if phase == "cpx" else "Liquid"
+                input_label = f"{phase_label} Compositions"
             target_label_full = "Barometry" if target_type == "P" else "Thermometry"
-            title = f"Effect of Analytical Uncertainty in {phase_label} Compositions on {target_label_full}"
+            title = f"Effect of Analytical Uncertainty in {input_label} on {target_label_full}"
             panels.append(
                 _make_abs_heatmap_panel(
                     matrix,
@@ -3725,6 +3722,91 @@ def plot_directional_equal_abs_composites(long_df: pd.DataFrame, fig_dir: Path) 
         filename = f"test_subset_directional_pm_abs_composite_{model_type}.png"
         composite.save(fig_dir / filename, dpi=(300, 300))
         count += 1
+    return count
+
+
+def plot_directional_key_feature_abs_composites(long_df: pd.DataFrame, fig_dir: Path, out_dir: Path) -> int:
+    """Plot final nonzero-oxide absolute-effect composites with key-feature boxes."""
+    for old_png in fig_dir.glob("test_subset_directional_pm_abs_composite_*_key_features.png"):
+        old_png.unlink()
+
+    fonts = {
+        "letter": _pil_font(30, bold=True),
+        "title": _pil_font(30),
+        "axis": _pil_font(22),
+        "model": _pil_font(22),
+        "feature": _pil_font(21),
+        "tick": _pil_font(20),
+    }
+    panel_letters = list("abcd")
+    features = directional_key_features()
+    count_tables: list[pd.DataFrame] = []
+    count = 0
+
+    for model_type in ["cpx_liq", "cpx_only"]:
+        panel_specs = [
+            ("P", "cpx", "Pressure", "kbar"),
+            ("P", "liq", "Pressure", "kbar"),
+            ("T", "cpx", "Temperature", "deg C"),
+            ("T", "liq", "Temperature", "deg C"),
+        ]
+        if model_type == "cpx_only":
+            panel_specs = [
+                ("P", "cpx", "Pressure", "kbar"),
+                ("T", "cpx", "Temperature", "deg C"),
+            ]
+
+        panels: list[Image.Image] = []
+        box_rows: list[dict[str, object]] = []
+        for idx, (target_type, phase, _target_label, unit) in enumerate(panel_specs):
+            matrix = _abs_effect_matrix(
+                long_df,
+                model_type=model_type,
+                target_type=target_type,
+                phase=phase,
+            )
+            if model_type == "cpx_only" and phase == "cpx":
+                matrix = _append_cpx_only_h2o_column(long_df, matrix, target_type=target_type)
+            if matrix is None:
+                continue
+            if model_type == "cpx_only" and phase == "cpx" and "H2O_liq" in matrix.columns:
+                input_label = "Clinopyroxene Compositions and Melt H2O"
+            else:
+                phase_label = "Clinopyroxene" if phase == "cpx" else "Liquid"
+                input_label = f"{phase_label} Compositions"
+            target_label_full = "Barometry" if target_type == "P" else "Thermometry"
+            title = f"Effect of Analytical Uncertainty in {input_label} on {target_label_full}"
+            panel = _make_abs_heatmap_panel(
+                matrix,
+                title=title,
+                panel_letter=panel_letters[idx],
+                unit=unit,
+                fonts=fonts,
+            )
+            box_rows.extend(
+                _draw_directional_key_feature_boxes(
+                    panel,
+                    matrix,
+                    model_type=model_type,
+                    target_type=target_type,
+                    phase=phase,
+                    title=title,
+                    features=features,
+                )
+            )
+            panels.append(panel)
+
+        if not panels:
+            continue
+        columns = 2 if len(panels) > 1 else 1
+        composite = _compose_panel_grid(panels, columns=columns)
+        filename = f"test_subset_directional_pm_abs_composite_{model_type}_key_features.png"
+        composite.save(fig_dir / filename, dpi=(300, 300))
+        count_tables.append(summarize_directional_key_feature_box_counts(long_df, box_rows))
+        count += 1
+
+    counts = pd.concat(count_tables, ignore_index=True) if count_tables else pd.DataFrame()
+    counts.to_csv(out_dir / "directional_key_feature_boxes_nonzero_oxide_counts_test_subset.csv", index=False)
     return count
 
 
@@ -3785,7 +3867,7 @@ def plot_directional_effect_heatmaps(ok: pd.DataFrame, fig_dir: Path) -> int:
                 ax.text(
                     split_x + (len(matrix.columns) - split_x) / 2,
                     -0.55,
-                    "liq +3%",
+                    "liq +oxide-specific error",
                     ha="center",
                     va="bottom",
                     fontsize=9,
@@ -3798,32 +3880,6 @@ def plot_directional_effect_heatmaps(ok: pd.DataFrame, fig_dir: Path) -> int:
         count += 1
 
     return count
-
-
-def write_readme(output_dir: Path, baseline_source: Path | None, qc: dict[str, object]) -> None:
-    """Write a concise README describing analysis choices."""
-    source_text = str(baseline_source) if baseline_source else "No compatible existing baseline was found; baseline was computed for the test subset only."
-    text = f"""# Test-subset uncertainty analysis
-
-This folder contains uncertainty and sensitivity outputs generated from only the independent experimental test subset.
-
-- Input file: `paper/data/independent_data_final.xlsx`, sheet `Sheet1`.
-- Split filter: rows where `training/testing` is `testing` or `test` after case-insensitive normalization.
-- Retained test-subset rows: {qc.get('testing_rows')}.
-- Total input rows: {qc.get('total_rows')}; training rows: {qc.get('training_rows')}.
-- Core baseline/Kd/analytical OAT models: cpx-liquid thermobarometers only; cpx-only models were excluded from those core outputs.
-- Directional OAT extension: cpx-liquid and cpx-only model groups are plotted separately using oxide-specific analytical uncertainties and central plus/minus differences.
-- Framework-level directional extension: cpx-liquid and cpx-only AIMS4PT final recommendations are tested separately using the same oxide-specific central plus/minus perturbations.
-- Pairing: fixed experimental cpx-liquid pairs were used; liquids were not re-paired.
-- Kd analysis: association between observed Kd(Fe-Mg) and model predictions/residuals, not a re-pairing experiment.
-- Analytical perturbations: cpx oxides at 0.5% and 1%; liquid oxides at 1%, 2%, and 3%.
-- Perturbation method: deterministic one-at-a-time plus/minus relative perturbations; no Monte Carlo.
-- Cpx QC: perturbed cpx compositions must pass 97-103 wt.% total and 0.9-1.1 stoichiometric ratio before model calculation.
-- Liquid QC: perturbed liquid compositions must pass the liquid total upper-bound check of <=105 wt.% before model calculation.
-- H2O handling: H2O_liq is included only in liquid directional panels using an absolute +/-3 wt.% perturbation.
-- Baseline reuse: {source_text}
-"""
-    (output_dir / "README_test_subset.md").write_text(text, encoding="utf-8")
 
 
 def verify_outputs(paths: dict[str, Path]) -> list[Path]:
@@ -3859,14 +3915,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--experiments",
         nargs="+",
-        default=["baseline", "kd", "analytical_oat", "directional_equal_oat", "framework_directional_oat"],
+        default=["baseline", "kd", "analytical_oat", "directional_equal_oat"],
         choices=[
             "baseline",
             "kd",
             "analytical_oat",
             "directional_equal_oat",
             "directional_all_oxides",
-            "framework_directional_oat",
             "directional_repair",
         ],
     )
@@ -3931,17 +3986,12 @@ def main() -> None:
     directional_rows = 0
     directional_figures = 0
     directional_all_rows = 0
-    framework_rows = 0
-    framework_figures = 0
     if "directional_equal_oat" in args.experiments:
         directional_df, directional_figures = run_directional_equal_error_analysis(test_df, paths, args.reuse_existing)
         directional_rows = int(len(directional_df))
     if "directional_all_oxides" in args.experiments:
         directional_all_df = run_directional_all_oxides_analysis(test_df, paths, args.reuse_existing)
         directional_all_rows = int(len(directional_all_df))
-    if "framework_directional_oat" in args.experiments:
-        framework_df, framework_figures = run_framework_directional_analysis(test_df, paths, args.reuse_existing)
-        framework_rows = int(len(framework_df))
     if "directional_repair" in args.experiments:
         directional_df, directional_figures = repair_directional_equal_error_analysis(
             test_df,
@@ -3952,13 +4002,10 @@ def main() -> None:
         )
         directional_rows = int(len(directional_df))
 
-    if needs_core_baseline or not (output_dir / "README_test_subset.md").exists():
-        write_readme(output_dir, baseline_source, qc)
     missing_figs = verify_outputs(paths)
     figure_count = (
         len(list(paths["kd_fig"].glob("*.png")))
         + len(list(paths["analytical_fig"].glob("*.png")))
-        + len(list(paths["framework_fig"].glob("*.png")))
     )
     failed_calcs = int((baseline["status"] != "ok").sum())
     if "analytical_oat" in args.experiments:
@@ -3982,7 +4029,6 @@ def main() -> None:
     print(f"Generated figure count: {figure_count} (analytical figures this run/reuse: {analytical_figures})")
     print(f"Directional equal-error OAT rows: {directional_rows}; figures: {directional_figures}")
     print(f"Directional all-oxide OAT rows: {directional_all_rows}")
-    print(f"Framework final-result OAT rows: {framework_rows}; figures: {framework_figures}")
     print(f"Output directory: {output_dir}")
 
 
