@@ -20,7 +20,6 @@ dependencies:
   - openpyxl
   - xlsxwriter
   - periodictable
-  - pyrolite=0.3.6
   - seaborn
   - joblib
   - py-xgboost>=3.2,<3.3
@@ -46,3 +45,4 @@ dependencies:
   - pip:
       - "tensorflow>=2.21,<2.22"
       - "keras>=3.12,<3.13"
+      - "pyrolite>=0.3.6,<0.3.7"
