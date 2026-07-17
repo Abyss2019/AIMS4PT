@@ -3468,7 +3468,7 @@ def _add_panel_labels__nb03_c16(axes, labels, *, x=0.02, y=0.98, **kwargs):
             x,
             y,
             lab,
-            transform=ax.transAxes,  # ✅ 只在这里指定
+            transform=ax.transAxes,
             **default_kwargs,
         )
 
@@ -3568,8 +3568,8 @@ def plot_pressure_residual_panel__nb03_c20(
     rmse_text_kwargs=None,
     workflow_rmse_override=None,
     individual_rmse_override=None,
-    workflow_rmse_fmt=".2f",
-    individual_rmse_fmt=".2f",
+    workflow_rmse_fmt=".1f",
+    individual_rmse_fmt=".1f",
     individual_style="version_a",
     add_workflow_regression=True,
     workflow_regression_color="#980012",
@@ -3864,7 +3864,7 @@ def plot_temperature_residual_panel__nb03_c23(
     workflow_rmse_override=None,
     individual_rmse_override=None,
     workflow_rmse_fmt=".0f",
-    individual_rmse_fmt=".2f",
+    individual_rmse_fmt=".0f",
     individual_style="version_a",
     add_workflow_regression=True,
     workflow_regression_color="#980012",
@@ -4262,7 +4262,7 @@ def plot_pressure_residual_panel__nb03_c27(
             )
         ax.text(
             0.75, 0.90,
-            f"RMSE (AIMS4PT_cpx)\n= {wf_rmse:.2f} kbar",
+            f"RMSE (AIMS4PT_cpx)\n= {wf_rmse:.1f} kbar",
             transform=ax.transAxes,
             **rmse_text_kwargs,
         )

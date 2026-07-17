@@ -46,6 +46,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.patches import Rectangle
 import seaborn as sns
 from PIL import Image, ImageColor, ImageDraw, ImageFont
 
@@ -880,7 +881,11 @@ def plot_kd_residual_iqr_composite(
                 draw_open_circle(legend_x + 30, y + 15, 10, color)
                 draw.text((legend_x + 82, y - 4), str(model), font=fonts["legend"], fill=ink)
 
-    out_path = fig_dir / f"test_subset_kd_bin_residual_iqr_composite{filename_suffix}.png"
+    if filename_suffix:
+        filename = f"Fig_SX_Kd_bin_residual_iqr_composite{filename_suffix}.png"
+    else:
+        filename = "Fig_S13_Kd_bin_residual_distributions.png"
+    out_path = fig_dir / filename
     image.save(out_path, dpi=(600, 600))
     return 1
 
@@ -2432,6 +2437,32 @@ def _abs_effect_rgb(value: float, vmin: float, vmax: float) -> tuple[int, int, i
     return stops[-1][1]
 
 
+def _h2o_effect_rgb(value: float, vmin: float, vmax: float) -> tuple[int, int, int]:
+    """Map H2O absolute effects to a muted sequential green palette."""
+    if not np.isfinite(value):
+        return (250, 250, 250)
+    if not np.isfinite(vmin) or not np.isfinite(vmax):
+        return (255, 255, 255)
+    span = float(vmax) - float(vmin)
+    if span <= 0:
+        return (48, 123, 79)
+    stops = [
+        (0.00, (255, 255, 255)),
+        (0.18, (248, 252, 248)),
+        (0.40, (229, 241, 230)),
+        (0.64, (187, 218, 190)),
+        (0.82, (116, 176, 124)),
+        (1.00, (48, 123, 79)),
+    ]
+    scaled = max(0.0, min(1.0, (float(value) - float(vmin)) / span))
+    for (left_pos, left_rgb), (right_pos, right_rgb) in zip(stops[:-1], stops[1:]):
+        if scaled <= right_pos:
+            span = right_pos - left_pos
+            fraction = 0.0 if span == 0 else (scaled - left_pos) / span
+            return _blend_rgb(left_rgb, right_rgb, fraction)
+    return stops[-1][1]
+
+
 def _format_abs_tick(value: float) -> str:
     """Format colorbar tick labels for absolute effects."""
     value = float(value)
@@ -2936,6 +2967,21 @@ def _maintext_mpl_cmap() -> LinearSegmentedColormap:
     return cmap
 
 
+def _maintext_mpl_h2o_cmap() -> LinearSegmentedColormap:
+    """Return the muted green colormap used by the H2O strip."""
+    colors = [
+        (255 / 255, 255 / 255, 255 / 255),
+        (248 / 255, 252 / 255, 248 / 255),
+        (229 / 255, 241 / 255, 230 / 255),
+        (187 / 255, 218 / 255, 190 / 255),
+        (116 / 255, 176 / 255, 124 / 255),
+        (48 / 255, 123 / 255, 79 / 255),
+    ]
+    cmap = LinearSegmentedColormap.from_list("aims4pt_maintext_h2o_greens", colors)
+    cmap.set_bad("#fafafa")
+    return cmap
+
+
 def _maintext_mpl_chemical_label(oxide: str, *, h2o_star: bool = False) -> str:
     """Return a matplotlib mathtext label with chemical subscripts."""
     base = oxide_base_name(oxide, "liq" if str(oxide).endswith("_liq") else "cpx")
@@ -2965,8 +3011,9 @@ def _render_formula_label(
 ) -> Image.Image:
     """Render a chemical label with digit characters drawn as subscripts."""
     measure = ImageDraw.Draw(Image.new("RGBA", (1, 1), (255, 255, 255, 0)))
-    sub_offset = 9
-    padding = 4
+    local_scale = max(1.0, float(getattr(font, "size", 19)) / 19.0)
+    sub_offset = int(round(9 * local_scale))
+    padding = int(round(4 * local_scale))
     width = padding * 2
     normal_h = _text_size(measure, "Ag", font)[1]
     for char in str(text):
@@ -2988,6 +3035,11 @@ def _render_formula_label(
     return image
 
 
+def _maintext_font_scale(fonts: dict[str, ImageFont.ImageFont]) -> float:
+    """Infer the current render scale from the tick font size."""
+    return max(1.0, float(getattr(fonts.get("tick"), "size", 16)) / 16.0)
+
+
 def _draw_rotated_formula_label(
     image: Image.Image,
     text: str,
@@ -3005,6 +3057,41 @@ def _draw_rotated_formula_label(
     image.paste(rotated, xy, rotated)
 
 
+def _draw_rotated_h2o_colorbar_label(
+    image: Image.Image,
+    xy: tuple[int, int],
+    *,
+    fonts: dict[str, ImageFont.ImageFont],
+    fill: tuple[int, int, int],
+    angle: int = 90,
+) -> None:
+    """Draw the H2O colorbar label with a real subscript 2."""
+    prefix = "Median absolute effect for "
+    suffix = " (°C)"
+    font = fonts["cbar"]
+    sub_font = fonts["cbar_sub"]
+    measure = ImageDraw.Draw(Image.new("RGBA", (1, 1), (255, 255, 255, 0)))
+    prefix_w, prefix_h = _text_size(measure, prefix, font)
+    suffix_w, suffix_h = _text_size(measure, suffix, font)
+    formula = _render_formula_label("H2O", font=font, sub_font=sub_font, fill=fill)
+    local_scale = _maintext_font_scale(fonts)
+    width = prefix_w + formula.width + suffix_w + int(round(12 * local_scale))
+    height = max(prefix_h, suffix_h, formula.height) + int(round(8 * local_scale))
+    label_image = Image.new("RGBA", (width, height), (255, 255, 255, 0))
+    label_draw = ImageDraw.Draw(label_image)
+    y_text = (height - prefix_h) // 2
+    y_formula = (height - formula.height) // 2
+    x = 4
+    label_draw.text((x, y_text), prefix, font=font, fill=fill)
+    x += prefix_w
+    label_image.paste(formula, (x, y_formula), formula)
+    x += formula.width
+    label_draw.text((x, y_text), suffix, font=font, fill=fill)
+    resampling = getattr(Image, "Resampling", Image).BICUBIC
+    rotated = label_image.rotate(angle, expand=True, resample=resampling)
+    image.paste(rotated, xy, rotated)
+
+
 def _draw_maintext_pil_colorbar(
     image: Image.Image,
     draw: ImageDraw.ImageDraw,
@@ -3015,26 +3102,87 @@ def _draw_maintext_pil_colorbar(
     vmax: float,
     label: str,
     fonts: dict[str, ImageFont.ImageFont],
+    rgb_func=_abs_effect_rgb,
 ) -> None:
     """Draw a compact panel-specific vertical colorbar."""
-    bar_w = 13
+    scale = _maintext_font_scale(fonts)
+    bar_w = int(round(13 * scale))
     for i in range(height):
         value = float(vmax) - float(vmax) * i / max(1, height - 1)
-        draw.line((x, y + i, x + bar_w, y + i), fill=_abs_effect_rgb(value, 0.0, vmax))
-    draw.rectangle((x, y, x + bar_w, y + height), outline=(130, 130, 130), width=1)
+        draw.line((x, y + i, x + bar_w, y + i), fill=rgb_func(value, 0.0, vmax))
+    line_w = max(1, int(round(scale)))
+    draw.rectangle((x, y, x + bar_w, y + height), outline=(130, 130, 130), width=line_w)
     for frac, value in [(0.0, vmax), (0.5, vmax / 2), (1.0, 0.0)]:
         yy = int(y + frac * height)
-        draw.line((x + bar_w + 3, yy, x + bar_w + 9, yy), fill=(100, 100, 100), width=1)
+        draw.line(
+            (x + bar_w + int(round(3 * scale)), yy, x + bar_w + int(round(9 * scale)), yy),
+            fill=(100, 100, 100),
+            width=line_w,
+        )
         tick = _format_abs_tick(value)
-        draw.text((x + bar_w + 12, yy - 8), tick, font=fonts["tick"], fill=(35, 35, 35))
-    _draw_rotated_text(
-        image,
-        label,
-        (x + bar_w + 45, y + max(0, (height - 205) // 2)),
-        fonts["cbar"],
-        (25, 25, 25),
-        angle=90,
-    )
+        draw.text(
+            (x + bar_w + int(round(12 * scale)), yy - int(round(8 * scale))),
+            tick,
+            font=fonts["tick"],
+            fill=(35, 35, 35),
+        )
+    label_xy = (x + bar_w + int(round(45 * scale)), y + max(0, (height - int(round(205 * scale))) // 2))
+    if label == "Median absolute effect for H2O (°C)":
+        _draw_rotated_h2o_colorbar_label(image, label_xy, fonts=fonts, fill=(25, 25, 25), angle=90)
+    else:
+        _draw_rotated_text(
+            image,
+            label,
+            label_xy,
+            fonts["cbar"],
+            (25, 25, 25),
+            angle=90,
+        )
+
+
+def _draw_hatched_cell(
+    draw: ImageDraw.ImageDraw,
+    *,
+    x0: int,
+    y0: int,
+    x1: int,
+    y1: int,
+    fill: tuple[int, int, int] = (224, 224, 224),
+    hatch: tuple[int, int, int] = (145, 145, 145),
+) -> None:
+    """Draw a gray unused-feature cell with clipped diagonal hatching."""
+    draw.rectangle((x0, y0, x1, y1), fill=fill, outline=(255, 255, 255), width=1)
+    width = max(1, x1 - x0)
+    height = max(1, y1 - y0)
+    scale = max(1.0, min(width, height) / 34.0)
+    line_w = max(1, int(round(scale)))
+    step = max(6, int(round(8 * scale)))
+    for intercept in range(0, width + height + step, step):
+        points: list[tuple[float, float]] = []
+        candidates = [
+            (0.0, float(intercept)),
+            (float(width), float(intercept - width)),
+            (float(intercept), 0.0),
+            (float(intercept - height), float(height)),
+        ]
+        for px, py in candidates:
+            if 0.0 <= px <= width and 0.0 <= py <= height:
+                point = (px, py)
+                if point not in points:
+                    points.append(point)
+        if len(points) >= 2:
+            (xa, ya), (xb, yb) = points[0], points[1]
+            draw.line((x0 + xa, y0 + ya, x0 + xb, y0 + yb), fill=hatch, width=line_w)
+
+
+def _maintext_vmax(values: pd.DataFrame, fallback: float = 1.0) -> float:
+    """Return a positive finite vmax for one or more main-text heatmap values."""
+    arr = values.to_numpy(dtype=float)
+    finite = arr[np.isfinite(arr)]
+    vmax = float(np.nanmax(finite)) if len(finite) else float(fallback)
+    if not np.isfinite(vmax) or vmax <= 0:
+        return float(fallback)
+    return vmax
 
 
 def _draw_maintext_pil_panel(
@@ -3054,32 +3202,38 @@ def _draw_maintext_pil_panel(
     colorbar_cols: int,
     model_type: str,
     target_type: str,
-) -> None:
+    vmax: float | None = None,
+    label_w: int = 120,
+) -> tuple[int, int, int, int, float]:
     """Draw one PIL heatmap panel for the main-text analytical figure."""
     arr = values.to_numpy(dtype=float)
-    finite = arr[np.isfinite(arr)]
-    vmax = float(np.nanmax(finite)) if len(finite) else 1.0
-    if not np.isfinite(vmax) or vmax <= 0:
-        vmax = 1.0
+    panel_vmax = _maintext_vmax(values) if vmax is None else float(vmax)
+    if not np.isfinite(panel_vmax) or panel_vmax <= 0:
+        panel_vmax = 1.0
 
     n_rows, n_cols = arr.shape
-    label_w = 120
+    scale = max(1.0, float(cell_h) / 34.0)
+    line_w = max(1, int(round(scale)))
     grid_x = x + label_w
     grid_y = y
     grid_w = n_cols * cell_w
     grid_h = n_rows * cell_h
     ink = (20, 20, 20)
     axis = (175, 175, 175)
-    unused_fill = (221, 221, 221)
     box_color = (238, 126, 110)
     key_features = directional_key_features()
 
-    draw.text((x - 26, y - 24), panel_label, font=fonts["panel"], fill=ink)
+    draw.text((x - int(round(26 * scale)), y - int(round(24 * scale))), panel_label, font=fonts["panel"], fill=ink)
     for row_i in range(n_rows):
         model = str(values.index[row_i])
         model_label = _maintext_model_label(model)
         mw, mh = _text_size(draw, model_label, fonts["model"])
-        draw.text((grid_x - mw - 8, grid_y + row_i * cell_h + (cell_h - mh) // 2), model_label, font=fonts["model"], fill=ink)
+        draw.text(
+            (grid_x - mw - int(round(8 * scale)), grid_y + row_i * cell_h + (cell_h - mh) // 2),
+            model_label,
+            font=fonts["model"],
+            fill=ink,
+        )
         feature_set = key_features.get((model_type, target_type, model), set())
         for col_i, oxide in enumerate(values.columns):
             x0 = grid_x + col_i * cell_w
@@ -3087,17 +3241,18 @@ def _draw_maintext_pil_panel(
             x1 = x0 + cell_w - 1
             y1 = y0 + cell_h - 1
             if bool(unused.iat[row_i, col_i]):
-                fill = unused_fill
+                _draw_hatched_cell(draw, x0=x0, y0=y0, x1=x1, y1=y1)
             else:
-                fill = _abs_effect_rgb(arr[row_i, col_i], 0.0, vmax)
-            draw.rectangle((x0, y0, x1, y1), fill=fill, outline=(255, 255, 255), width=1)
+                fill = _abs_effect_rgb(arr[row_i, col_i], 0.0, panel_vmax)
+                draw.rectangle((x0, y0, x1, y1), fill=fill, outline=(255, 255, 255), width=line_w)
             if oxide in feature_set:
-                draw.rectangle((x0 + 2, y0 + 2, x1 - 2, y1 - 2), outline=box_color, width=3)
+                inset = max(2, int(round(2 * scale)))
+                draw.rectangle((x0 + inset, y0 + inset, x1 - inset, y1 - inset), outline=box_color, width=max(3, int(round(3 * scale))))
 
-    draw.rectangle((grid_x, grid_y, grid_x + grid_w, grid_y + grid_h), outline=axis, width=1)
+    draw.rectangle((grid_x, grid_y, grid_x + grid_w, grid_y + grid_h), outline=axis, width=line_w)
     for col_i, label in enumerate(xlabels):
-        tx = grid_x + col_i * cell_w + 5
-        ty = grid_y + grid_h + 9
+        tx = grid_x + col_i * cell_w + int(round(5 * scale))
+        ty = grid_y + grid_h + int(round(9 * scale))
         _draw_rotated_formula_label(
             image,
             label,
@@ -3110,13 +3265,71 @@ def _draw_maintext_pil_panel(
     _draw_maintext_pil_colorbar(
         image,
         draw,
-        x=grid_x + colorbar_cols * cell_w + 20,
+        x=grid_x + colorbar_cols * cell_w + int(round(20 * scale)),
         y=grid_y,
         height=grid_h,
-        vmax=vmax,
+        vmax=panel_vmax,
         label=f"Median absolute effect ({unit})",
         fonts=fonts,
     )
+    return grid_x, grid_y, grid_w, grid_h, panel_vmax
+
+
+def _draw_maintext_pil_h2o_strip(
+    image: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    *,
+    x: int,
+    y: int,
+    values: pd.DataFrame,
+    unused: pd.DataFrame,
+    x_label: str,
+    vmax: float,
+    fonts: dict[str, ImageFont.ImageFont],
+    cell_w: int,
+    cell_h: int,
+    model_type: str,
+    target_type: str,
+) -> tuple[int, int, int, int]:
+    """Draw a standalone one-column H2O strip next to a thermometry panel."""
+    arr = values.to_numpy(dtype=float)
+    n_rows = arr.shape[0]
+    scale = max(1.0, float(cell_h) / 34.0)
+    line_w = max(1, int(round(scale)))
+    strip_w = max(28, int(round(cell_w * 0.58)))
+    grid_h = n_rows * cell_h
+    ink = (20, 20, 20)
+    axis = (175, 175, 175)
+    box_color = (238, 126, 110)
+    key_features = directional_key_features()
+
+    for row_i, model in enumerate(values.index):
+        x0 = x
+        y0 = y + row_i * cell_h
+        x1 = x0 + strip_w - 1
+        y1 = y0 + cell_h - 1
+        oxide = str(values.columns[0])
+        if bool(unused.iat[row_i, 0]):
+            _draw_hatched_cell(draw, x0=x0, y0=y0, x1=x1, y1=y1)
+        else:
+            fill = _h2o_effect_rgb(arr[row_i, 0], 0.0, vmax)
+            draw.rectangle((x0, y0, x1, y1), fill=fill, outline=(255, 255, 255), width=line_w)
+        feature_set = key_features.get((model_type, target_type, str(model)), set())
+        if oxide in feature_set:
+            inset = max(2, int(round(2 * scale)))
+            draw.rectangle((x0 + inset, y0 + inset, x1 - inset, y1 - inset), outline=box_color, width=max(3, int(round(3 * scale))))
+
+    draw.rectangle((x, y, x + strip_w, y + grid_h), outline=axis, width=line_w)
+    _draw_rotated_formula_label(
+        image,
+        x_label,
+        (x + int(round(1 * scale)), y + grid_h + int(round(9 * scale))),
+        font=fonts["xlabel"],
+        sub_font=fonts["xlabel_sub"],
+        fill=ink,
+        angle=45,
+    )
+    return x, y, strip_w, grid_h
 
 
 def _draw_maintext_mpl_panel(
@@ -3206,7 +3419,8 @@ def _draw_maintext_mpl_panel(
 def plot_analytical_uncertainty_maintext_combined(long_df: pd.DataFrame, fig_dir: Path) -> int:
     """Create the final 3x2 main-text analytical-uncertainty heatmap."""
     fig_dir.mkdir(parents=True, exist_ok=True)
-    output_stem = fig_dir / "analytical_uncertainty_maintext_combined"
+    output_stem = fig_dir / "Fig_7_analytical_uncertainty_maintext_combined"
+    return _plot_analytical_uncertainty_maintext_combined_mpl(long_df, output_stem)
 
     panel_specs = [
         ("cpx_only", "P", "cpx", "a"),
@@ -3226,6 +3440,7 @@ def plot_analytical_uncertainty_maintext_combined(long_df: pd.DataFrame, fig_dir
         "xlabel_sub": _pil_font(13),
         "tick": _pil_font(16),
         "cbar": _pil_font(17),
+        "cbar_sub": _pil_font(12),
     }
 
     cell_w = 52
@@ -3236,7 +3451,7 @@ def plot_analytical_uncertainty_maintext_combined(long_df: pd.DataFrame, fig_dir
     gap_x = 50
     right_x = left_x + panel_w + gap_x
     row_tops = [135, 560, 880]
-    width = 1820
+    width = 1995
     height = 1215
     image = Image.new("RGB", (width, height), (255, 255, 255))
     draw = ImageDraw.Draw(image)
@@ -3298,6 +3513,526 @@ def plot_analytical_uncertainty_maintext_combined(long_df: pd.DataFrame, fig_dir
     image.save(output_stem.with_suffix(".png"), dpi=(300, 300))
     image.save(output_stem.with_suffix(".pdf"), "PDF", resolution=300.0)
     return 2
+
+
+def _plot_analytical_uncertainty_maintext_combined_split_h2o(long_df: pd.DataFrame, output_stem: Path) -> int:
+    """Create the main-text heatmap with thermometry H2O plotted as separate strips."""
+    panel_specs = [
+        ("cpx_only", "P", "cpx", "a"),
+        ("cpx_only", "T", "cpx", "b"),
+        ("cpx_liq", "P", "cpx", "c"),
+        ("cpx_liq", "T", "cpx", "d"),
+        ("cpx_liq", "P", "liq", "e"),
+        ("cpx_liq", "T", "liq", "f"),
+    ]
+    render_scale = 2
+    output_dpi = 600
+    scale = lambda value: int(round(value * render_scale))
+    fonts = {
+        "group": _pil_font(scale(33), bold=True),
+        "column": _pil_font(scale(27), bold=True),
+        "row": _pil_font(scale(23), bold=True),
+        "panel": _pil_font(scale(30), bold=True),
+        "model": _pil_font(scale(20)),
+        "xlabel": _pil_font(scale(19)),
+        "xlabel_sub": _pil_font(scale(13)),
+        "tick": _pil_font(scale(16)),
+        "cbar": _pil_font(scale(17)),
+        "cbar_sub": _pil_font(scale(12)),
+    }
+
+    cell_w = scale(52)
+    cell_h = scale(34)
+    colorbar_cols = len(_maintext_feature_specs("cpx_only", "cpx"))
+    label_w = scale(120)
+    panel_w = scale(800)
+    left_x = scale(145)
+    gap_x = scale(50)
+    right_x = left_x + panel_w + gap_x
+    row_tops = [scale(value) for value in [135, 560, 880]]
+    width = scale(1995)
+    height = scale(1215)
+    image = Image.new("RGB", (width, height), (255, 255, 255))
+    draw = ImageDraw.Draw(image)
+    ink = (20, 20, 20)
+
+    grid_w_max = colorbar_cols * cell_w
+    left_center = left_x + label_w + grid_w_max // 2
+    right_center = right_x + label_w + grid_w_max // 2
+    group_center = (left_center + right_center) // 2
+
+    draw.text((left_center, scale(78)), "Barometry", font=fonts["column"], fill=ink, anchor="mm")
+    draw.text((right_center, scale(78)), "Thermometry", font=fonts["column"], fill=ink, anchor="mm")
+    draw.text((group_center, scale(32)), "Clinopyroxene-only models", font=fonts["group"], fill=ink, anchor="mm")
+    draw.text((group_center, scale(522)), "Clinopyroxene-liquid models", font=fonts["group"], fill=ink, anchor="mm")
+    _draw_rotated_text(image, "Clinopyroxene", (scale(42), row_tops[1] + scale(105)), fonts["row"], ink, angle=90)
+    _draw_rotated_text(image, "Liquid", (scale(42), row_tops[2] + scale(100)), fonts["row"], ink, angle=90)
+
+    positions = [
+        (left_x, row_tops[0]),
+        (right_x, row_tops[0]),
+        (left_x, row_tops[1]),
+        (right_x, row_tops[1]),
+        (left_x, row_tops[2]),
+        (right_x, row_tops[2]),
+    ]
+
+    panel_data: list[dict[str, object]] = []
+    h2o_frames: list[pd.DataFrame] = []
+    for (model_type, target_type, phase, panel_label), (x, y) in zip(panel_specs, positions):
+        feature_specs = _maintext_feature_specs(model_type, phase)
+        model_order = _maintext_model_order(long_df, model_type, target_type)
+        split_h2o = target_type == "T" and any(oxide == "H2O_liq" for _, oxide in feature_specs)
+        main_feature_specs = [
+            (source_phase, oxide)
+            for source_phase, oxide in feature_specs
+            if not (split_h2o and oxide == "H2O_liq")
+        ]
+        h2o_feature_specs = [
+            (source_phase, oxide)
+            for source_phase, oxide in feature_specs
+            if split_h2o and oxide == "H2O_liq"
+        ]
+        values, unused = _maintext_effect_and_unused_matrices(
+            long_df,
+            model_type=model_type,
+            target_type=target_type,
+            feature_specs=main_feature_specs,
+            model_order=model_order,
+        )
+        h2o_values: pd.DataFrame | None = None
+        h2o_unused: pd.DataFrame | None = None
+        if h2o_feature_specs:
+            h2o_values, h2o_unused = _maintext_effect_and_unused_matrices(
+                long_df,
+                model_type=model_type,
+                target_type=target_type,
+                feature_specs=h2o_feature_specs,
+                model_order=model_order,
+            )
+            h2o_frames.append(h2o_values)
+
+        xlabels = [
+            _maintext_chemical_label(oxide, h2o_star=(model_type == "cpx_only" and oxide == "H2O_liq"))
+            for _, oxide in main_feature_specs
+        ]
+        panel_data.append(
+            {
+                "model_type": model_type,
+                "target_type": target_type,
+                "panel_label": panel_label,
+                "x": x,
+                "y": y,
+                "values": values,
+                "unused": unused,
+                "xlabels": xlabels,
+                "h2o_values": h2o_values,
+                "h2o_unused": h2o_unused,
+                "h2o_label": _maintext_chemical_label("H2O_liq", h2o_star=(model_type == "cpx_only")),
+            }
+        )
+
+    h2o_vmax = 1.0
+    if h2o_frames:
+        h2o_vmax = max(_maintext_vmax(frame) for frame in h2o_frames)
+
+    h2o_strip_geometries: list[tuple[int, int, int, int]] = []
+    for panel in panel_data:
+        model_type = str(panel["model_type"])
+        target_type = str(panel["target_type"])
+        x = int(panel["x"])
+        y = int(panel["y"])
+        xlabels = panel["xlabels"]  # type: ignore[assignment]
+        _draw_maintext_pil_panel(
+            image,
+            draw,
+            x=x,
+            y=y,
+            values=panel["values"],  # type: ignore[arg-type]
+            unused=panel["unused"],  # type: ignore[arg-type]
+            xlabels=xlabels,  # type: ignore[arg-type]
+            panel_label=str(panel["panel_label"]),
+            unit="kbar" if target_type == "P" else "°C",
+            model_type=model_type,
+            target_type=target_type,
+            fonts=fonts,
+            cell_w=cell_w,
+            cell_h=cell_h,
+            colorbar_cols=colorbar_cols,
+            label_w=label_w,
+        )
+
+        h2o_values = panel["h2o_values"]
+        h2o_unused = panel["h2o_unused"]
+        if h2o_values is not None and h2o_unused is not None:
+            strip_x = x + label_w + len(xlabels) * cell_w + scale(8)  # type: ignore[arg-type]
+            geometry = _draw_maintext_pil_h2o_strip(
+                image,
+                draw,
+                x=strip_x,
+                y=y,
+                values=h2o_values,  # type: ignore[arg-type]
+                unused=h2o_unused,  # type: ignore[arg-type]
+                x_label=str(panel["h2o_label"]),
+                vmax=h2o_vmax,
+                fonts=fonts,
+                cell_w=cell_w,
+                cell_h=cell_h,
+                model_type=model_type,
+                target_type=target_type,
+            )
+            h2o_strip_geometries.append(geometry)
+
+    if h2o_strip_geometries:
+        h2o_y0 = min(y for _, y, _, _ in h2o_strip_geometries)
+        h2o_y1 = max(y + h for _, y, _, h in h2o_strip_geometries)
+        _draw_maintext_pil_colorbar(
+            image,
+            draw,
+            x=scale(1840),
+            y=h2o_y0,
+            height=h2o_y1 - h2o_y0,
+            vmax=h2o_vmax,
+            label="Median absolute effect for H2O (°C)",
+            fonts=fonts,
+            rgb_func=_h2o_effect_rgb,
+        )
+
+    image.save(output_stem.with_suffix(".png"), dpi=(output_dpi, output_dpi))
+    image.save(output_stem.with_suffix(".pdf"), "PDF", resolution=float(output_dpi))
+    return 2
+
+
+def _maintext_mpl_rect(
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+    *,
+    canvas_width: float,
+    canvas_height: float,
+) -> list[float]:
+    """Convert top-left pixel-style layout coordinates to matplotlib figure coordinates."""
+    return [
+        x / canvas_width,
+        (canvas_height - y - height) / canvas_height,
+        width / canvas_width,
+        height / canvas_height,
+    ]
+
+
+def _draw_unused_mpl_cell(ax: plt.Axes, col_i: int, row_i: int) -> None:
+    """Draw one gray hatched cell for an unused feature."""
+    rect = Rectangle(
+        (col_i - 0.5, row_i - 0.5),
+        1.0,
+        1.0,
+        facecolor="#e0e0e0",
+        edgecolor="#8f8f8f",
+        hatch="////",
+        linewidth=0.25,
+        zorder=3,
+    )
+    ax.add_patch(rect)
+
+
+def _draw_key_feature_mpl_box(ax: plt.Axes, col_i: int, row_i: int) -> None:
+    """Draw one red outline around a key feature cell."""
+    rect = Rectangle(
+        (col_i - 0.5 + 0.035, row_i - 0.5 + 0.035),
+        0.93,
+        0.93,
+        facecolor="none",
+        edgecolor="#ee7e6e",
+        linewidth=0.75,
+        zorder=4,
+    )
+    ax.add_patch(rect)
+
+
+def _draw_maintext_mpl_heatmap_panel(
+    fig: plt.Figure,
+    ax: plt.Axes,
+    cax: plt.Axes,
+    *,
+    values: pd.DataFrame,
+    unused: pd.DataFrame,
+    xlabels: list[str],
+    panel_label: str,
+    unit: str,
+    cmap: LinearSegmentedColormap,
+    model_type: str,
+    target_type: str,
+    vmax: float | None = None,
+) -> None:
+    """Draw one matplotlib heatmap panel plus its own colorbar."""
+    arr = values.to_numpy(dtype=float)
+    panel_vmax = _maintext_vmax(values) if vmax is None else float(vmax)
+    if not np.isfinite(panel_vmax) or panel_vmax <= 0:
+        panel_vmax = 1.0
+
+    im = ax.imshow(
+        np.ma.masked_invalid(arr),
+        cmap=cmap,
+        vmin=0.0,
+        vmax=panel_vmax,
+        aspect="auto",
+        interpolation="none",
+        zorder=1,
+    )
+
+    n_rows, n_cols = arr.shape
+    key_features = directional_key_features()
+    for row_i, model in enumerate(values.index):
+        feature_set = key_features.get((model_type, target_type, str(model)), set())
+        for col_i, oxide in enumerate(values.columns):
+            if bool(unused.iat[row_i, col_i]):
+                _draw_unused_mpl_cell(ax, col_i, row_i)
+            if oxide in feature_set:
+                _draw_key_feature_mpl_box(ax, col_i, row_i)
+
+    ax.set_xticks(np.arange(n_cols))
+    ax.set_xticklabels(xlabels, rotation=45, ha="right", rotation_mode="anchor", fontsize=6.8)
+    ax.set_yticks(np.arange(n_rows))
+    ax.set_yticklabels([_maintext_model_label(model) for model in values.index], fontsize=6.8)
+    ax.set_xlim(-0.5, n_cols - 0.5)
+    ax.set_ylim(n_rows - 0.5, -0.5)
+    ax.tick_params(axis="both", length=0, pad=1.5)
+    ax.set_xticks(np.arange(-0.5, n_cols, 1), minor=True)
+    ax.set_yticks(np.arange(-0.5, n_rows, 1), minor=True)
+    ax.grid(which="minor", color="white", linewidth=0.45, zorder=5)
+    ax.tick_params(which="minor", bottom=False, left=False)
+    for spine in ax.spines.values():
+        spine.set_linewidth(0.35)
+        spine.set_color("#9a9a9a")
+    ax.text(-0.25, 1.06, panel_label, transform=ax.transAxes, fontsize=9, fontweight="bold", va="bottom", ha="left")
+
+    cbar = fig.colorbar(im, cax=cax)
+    cbar.set_ticks([0.0, panel_vmax / 2, panel_vmax])
+    cbar.ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda value, _pos: _format_abs_tick(value)))
+    cbar.ax.tick_params(labelsize=6.2, length=2, pad=1)
+    cbar.outline.set_linewidth(0.3)
+    cbar.set_label(f"Median absolute effect ({unit})", fontsize=6.6, labelpad=5)
+
+
+def _draw_maintext_mpl_h2o_strip(
+    ax: plt.Axes,
+    *,
+    values: pd.DataFrame,
+    unused: pd.DataFrame,
+    x_label: str,
+    vmax: float,
+    cmap: LinearSegmentedColormap,
+    model_type: str,
+    target_type: str,
+) -> object:
+    """Draw a standalone one-column H2O strip next to a thermometry panel."""
+    arr = values.to_numpy(dtype=float)
+    im = ax.imshow(
+        np.ma.masked_invalid(arr),
+        cmap=cmap,
+        vmin=0.0,
+        vmax=vmax,
+        aspect="auto",
+        interpolation="none",
+        zorder=1,
+    )
+    n_rows = arr.shape[0]
+    oxide = str(values.columns[0])
+    key_features = directional_key_features()
+    for row_i, model in enumerate(values.index):
+        if bool(unused.iat[row_i, 0]):
+            _draw_unused_mpl_cell(ax, 0, row_i)
+        feature_set = key_features.get((model_type, target_type, str(model)), set())
+        if oxide in feature_set:
+            _draw_key_feature_mpl_box(ax, 0, row_i)
+
+    ax.set_xticks([0])
+    ax.set_xticklabels([x_label], rotation=45, ha="right", rotation_mode="anchor", fontsize=6.8)
+    ax.set_yticks(np.arange(n_rows))
+    ax.set_yticklabels([])
+    ax.set_xlim(-0.5, 0.5)
+    ax.set_ylim(n_rows - 0.5, -0.5)
+    ax.tick_params(axis="both", length=0, pad=1.5)
+    ax.set_xticks(np.arange(-0.5, 1, 1), minor=True)
+    ax.set_yticks(np.arange(-0.5, n_rows, 1), minor=True)
+    ax.grid(which="minor", color="white", linewidth=0.45, zorder=5)
+    ax.tick_params(which="minor", bottom=False, left=False)
+    for spine in ax.spines.values():
+        spine.set_linewidth(0.35)
+        spine.set_color("#9a9a9a")
+    return im
+
+
+def _plot_analytical_uncertainty_maintext_combined_mpl(long_df: pd.DataFrame, output_stem: Path) -> int:
+    """Create the final main-text heatmap using matplotlib and fig.savefig."""
+    panel_specs = [
+        ("cpx_only", "P", "cpx", "a"),
+        ("cpx_only", "T", "cpx", "b"),
+        ("cpx_liq", "P", "cpx", "c"),
+        ("cpx_liq", "T", "cpx", "d"),
+        ("cpx_liq", "P", "liq", "e"),
+        ("cpx_liq", "T", "liq", "f"),
+    ]
+    canvas_width = 1995.0
+    canvas_height = 1215.0
+    output_dpi = 600
+    fig = plt.figure(figsize=(9, 6), dpi=output_dpi)
+    blue_cmap = _maintext_mpl_cmap()
+    h2o_cmap = _maintext_mpl_h2o_cmap()
+
+    cell_w = 52.0
+    cell_h = 34.0
+    label_w = 120.0
+    colorbar_cols = len(_maintext_feature_specs("cpx_only", "cpx"))
+    panel_w = 800.0
+    left_x = 145.0
+    gap_x = 50.0
+    right_x = left_x + panel_w + gap_x
+    row_tops = [135.0, 560.0, 880.0]
+    positions = [
+        (left_x, row_tops[0]),
+        (right_x, row_tops[0]),
+        (left_x, row_tops[1]),
+        (right_x, row_tops[1]),
+        (left_x, row_tops[2]),
+        (right_x, row_tops[2]),
+    ]
+
+    grid_w_max = colorbar_cols * cell_w
+    left_center = left_x + label_w + grid_w_max / 2
+    right_center = right_x + label_w + grid_w_max / 2
+    group_center = (left_center + right_center) / 2
+    fig.text(left_center / canvas_width, 1 - 78.0 / canvas_height, "Barometry", ha="center", va="center", fontsize=10, fontweight="bold")
+    fig.text(right_center / canvas_width, 1 - 78.0 / canvas_height, "Thermometry", ha="center", va="center", fontsize=10, fontweight="bold")
+    fig.text(group_center / canvas_width, 1 - 32.0 / canvas_height, "Clinopyroxene-only models", ha="center", va="center", fontsize=12, fontweight="bold")
+    fig.text(group_center / canvas_width, 1 - 522.0 / canvas_height, "Clinopyroxene-liquid models", ha="center", va="center", fontsize=12, fontweight="bold")
+    fig.text(42.0 / canvas_width, 1 - (row_tops[0] + 135.0) / canvas_height, "Clinopyroxene perturbation", ha="center", va="center", rotation=90, fontsize=8.0, fontweight="bold")
+    fig.text(42.0 / canvas_width, 1 - (row_tops[1] + 105.0) / canvas_height, "Clinopyroxene perturbation", ha="center", va="center", rotation=90, fontsize=8.0, fontweight="bold")
+    fig.text(42.0 / canvas_width, 1 - (row_tops[2] + 100.0) / canvas_height, "Liquid perturbation", ha="center", va="center", rotation=90, fontsize=8.0, fontweight="bold")
+
+    panel_data: list[dict[str, object]] = []
+    h2o_frames: list[pd.DataFrame] = []
+    for (model_type, target_type, phase, panel_label), (x, y) in zip(panel_specs, positions):
+        feature_specs = _maintext_feature_specs(model_type, phase)
+        model_order = _maintext_model_order(long_df, model_type, target_type)
+        split_h2o = target_type == "T" and any(oxide == "H2O_liq" for _, oxide in feature_specs)
+        main_feature_specs = [
+            (source_phase, oxide)
+            for source_phase, oxide in feature_specs
+            if not (split_h2o and oxide == "H2O_liq")
+        ]
+        h2o_feature_specs = [
+            (source_phase, oxide)
+            for source_phase, oxide in feature_specs
+            if split_h2o and oxide == "H2O_liq"
+        ]
+        values, unused = _maintext_effect_and_unused_matrices(
+            long_df,
+            model_type=model_type,
+            target_type=target_type,
+            feature_specs=main_feature_specs,
+            model_order=model_order,
+        )
+        h2o_values: pd.DataFrame | None = None
+        h2o_unused: pd.DataFrame | None = None
+        if h2o_feature_specs:
+            h2o_values, h2o_unused = _maintext_effect_and_unused_matrices(
+                long_df,
+                model_type=model_type,
+                target_type=target_type,
+                feature_specs=h2o_feature_specs,
+                model_order=model_order,
+            )
+            h2o_frames.append(h2o_values)
+        xlabels = [
+            _maintext_mpl_chemical_label(oxide, h2o_star=(model_type == "cpx_only" and oxide == "H2O_liq"))
+            for _, oxide in main_feature_specs
+        ]
+        panel_data.append(
+            {
+                "model_type": model_type,
+                "target_type": target_type,
+                "panel_label": panel_label,
+                "x": x,
+                "y": y,
+                "values": values,
+                "unused": unused,
+                "xlabels": xlabels,
+                "h2o_values": h2o_values,
+                "h2o_unused": h2o_unused,
+                "h2o_label": _maintext_mpl_chemical_label("H2O_liq", h2o_star=(model_type == "cpx_only")),
+            }
+        )
+
+    h2o_vmax = max((_maintext_vmax(frame) for frame in h2o_frames), default=1.0)
+    h2o_im = None
+    h2o_strip_geometries: list[tuple[float, float, float, float]] = []
+    deg_c = "\N{DEGREE SIGN}C"
+
+    for panel in panel_data:
+        model_type = str(panel["model_type"])
+        target_type = str(panel["target_type"])
+        x = float(panel["x"])
+        y = float(panel["y"])
+        values = panel["values"]  # type: ignore[assignment]
+        xlabels = panel["xlabels"]  # type: ignore[assignment]
+        grid_x = x + label_w
+        grid_y = y
+        grid_w = len(xlabels) * cell_w  # type: ignore[arg-type]
+        grid_h = len(values.index) * cell_h  # type: ignore[union-attr]
+        ax = fig.add_axes(_maintext_mpl_rect(grid_x, grid_y, grid_w, grid_h, canvas_width=canvas_width, canvas_height=canvas_height))
+        cax_x = grid_x + colorbar_cols * cell_w + 20.0
+        cax = fig.add_axes(_maintext_mpl_rect(cax_x, grid_y, 13.0, grid_h, canvas_width=canvas_width, canvas_height=canvas_height))
+        _draw_maintext_mpl_heatmap_panel(
+            fig,
+            ax,
+            cax,
+            values=values,  # type: ignore[arg-type]
+            unused=panel["unused"],  # type: ignore[arg-type]
+            xlabels=xlabels,  # type: ignore[arg-type]
+            panel_label=str(panel["panel_label"]),
+            unit="kbar" if target_type == "P" else deg_c,
+            cmap=blue_cmap,
+            model_type=model_type,
+            target_type=target_type,
+        )
+
+        h2o_values = panel["h2o_values"]
+        h2o_unused = panel["h2o_unused"]
+        if h2o_values is not None and h2o_unused is not None:
+            strip_x = grid_x + len(xlabels) * cell_w + 8.0  # type: ignore[arg-type]
+            strip_w = max(28.0, round(cell_w * 0.58))
+            strip_ax = fig.add_axes(_maintext_mpl_rect(strip_x, grid_y, strip_w, grid_h, canvas_width=canvas_width, canvas_height=canvas_height))
+            h2o_im = _draw_maintext_mpl_h2o_strip(
+                strip_ax,
+                values=h2o_values,  # type: ignore[arg-type]
+                unused=h2o_unused,  # type: ignore[arg-type]
+                x_label=str(panel["h2o_label"]),
+                vmax=h2o_vmax,
+                cmap=h2o_cmap,
+                model_type=model_type,
+                target_type=target_type,
+            )
+            h2o_strip_geometries.append((strip_x, grid_y, strip_w, grid_h))
+
+    if h2o_im is not None and h2o_strip_geometries:
+        h2o_y0 = min(y for _, y, _, _ in h2o_strip_geometries)
+        h2o_y1 = max(y + h for _, y, _, h in h2o_strip_geometries)
+        h2o_cax = fig.add_axes(_maintext_mpl_rect(1840.0, h2o_y0, 13.0, h2o_y1 - h2o_y0, canvas_width=canvas_width, canvas_height=canvas_height))
+        h2o_cbar = fig.colorbar(h2o_im, cax=h2o_cax)
+        h2o_cbar.set_ticks([0.0, h2o_vmax / 2, h2o_vmax])
+        h2o_cbar.ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda value, _pos: _format_abs_tick(value)))
+        h2o_cbar.ax.tick_params(labelsize=6.2, length=2, pad=1)
+        h2o_cbar.outline.set_linewidth(0.3)
+        h2o_cbar.ax.set_title("H$_2$O effect\non thermometers", fontsize=6.8, pad=5)
+        h2o_cbar.set_label(f"Median absolute effect for H$_2$O ({deg_c})", fontsize=6.6, labelpad=5)
+
+    fig.savefig(output_stem.with_suffix(".png"), dpi=output_dpi)
+    fig.savefig(output_stem.with_suffix(".pdf"), dpi=output_dpi)
+    fig.savefig(output_stem.with_suffix(".svg"), dpi=output_dpi)
+    plt.close(fig)
+    return 3
 
 
 def _draw_abs_colorbar(
@@ -3885,9 +4620,9 @@ def plot_directional_effect_heatmaps(ok: pd.DataFrame, fig_dir: Path) -> int:
 def verify_outputs(paths: dict[str, Path]) -> list[Path]:
     """Return all required figure paths that are missing."""
     required = [
-        paths["kd_fig"] / "test_subset_kd_bin_residual_iqr_composite.png",
-        paths["kd_fig"] / "test_subset_kd_bin_residual_iqr_composite_0p04.png",
-        paths["kd_fig"] / "test_subset_kd_bin_residual_iqr_composite_abs_0p02.png",
+        paths["kd_fig"] / "Fig_S13_Kd_bin_residual_distributions.png",
+        paths["kd_fig"] / "Fig_SX_Kd_bin_residual_iqr_composite_0p04.png",
+        paths["kd_fig"] / "Fig_SX_Kd_bin_residual_iqr_composite_abs_0p02.png",
         paths["analytical_fig"] / "test_subset_pressure_heatmap_cpx_0p5pct.png",
         paths["analytical_fig"] / "test_subset_pressure_heatmap_cpx_1pct.png",
         paths["analytical_fig"] / "test_subset_pressure_heatmap_liq_1pct.png",

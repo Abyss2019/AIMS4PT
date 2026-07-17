@@ -1358,7 +1358,7 @@ def _lookup_workflow_rmse(
 
 def _format_workflow_rmse_label(kind: str, rmse: float) -> str:
     if kind == "P":
-        return f"AIMS4PT_cpx\nRMSE = {rmse:.2f} kbar"
+        return f"AIMS4PT_cpx\nRMSE = {rmse:.1f} kbar"
     return f"AIMS4PT_cpx\nRMSE = {rmse:.0f} $^\\circ$C"
 
 
@@ -3219,7 +3219,7 @@ def _annotate_literature_uncertainty_below_xtick(
     if kind == "P":
         label = f"{finite_uncertainty:.1f} kbar"
     elif kind == "T":
-        label = f"{finite_uncertainty:.1f} °C"
+        label = f"{finite_uncertainty:.0f} °C"
     else:
         return
     ax.text(
@@ -5433,7 +5433,7 @@ def pairwise_euclidean__nb04_c78(A: np.ndarray, B: np.ndarray) -> np.ndarray:
     Compute pairwise Euclidean distances between rows of A (n x d) and B (m x d).
     Returns dist matrix (n x m).
     """
-    # ||a-b||^2 = ||a||^2 + ||b||^2 - 2 a璺痓
+
     A2 = np.sum(A * A, axis=1)[:, None]   # (n,1)
     B2 = np.sum(B * B, axis=1)[None, :]   # (1,m)
     D2 = A2 + B2 - 2.0 * (A @ B.T)

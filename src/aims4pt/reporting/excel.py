@@ -7,6 +7,7 @@ import math
 import re
 from collections import Counter
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO
 
 import numpy as np
@@ -31,6 +32,12 @@ class ReportPayload:
     target: str
     model_selection_plot_png: bytes | None = None
     deviation_violin_plot_png: bytes | None = None
+    excel_model_summary_df: pd.DataFrame | None = None
+    excel_model_votes_df: pd.DataFrame | None = None
+    image_dpi: int = 200
+    model_selection_image_dpi: int | None = None
+    prediction_image_dpi: int | None = None
+    deviation_image_dpi: int | None = None
 
 
 MODEL_PLOT_COLORS = (
@@ -801,7 +808,7 @@ def _format_model_summary_values(df: pd.DataFrame, target: str) -> pd.DataFrame:
     return formatted
 
 
-def build_report_payload(
+def build_report_payload_legacy(
     workflow_obj: workflow_thermobarometry,
     model_list: list[ModelManager],
     original_data: pd.DataFrame,
@@ -869,7 +876,7 @@ def build_report_payload(
     )
 
 
-def write_report_excel(
+def write_report_excel_legacy(
     payload: ReportPayload,
     output: str | BinaryIO | io.BytesIO,
 ) -> None:
@@ -937,12 +944,71 @@ def write_report_excel(
         )
 
 
-def report_excel(
+def report_excel_legacy(
     workflow_obj: workflow_thermobarometry,
     model_list: list[ModelManager],
     original_data: pd.DataFrame,
     out_path: str | BinaryIO | io.BytesIO,
 ) -> None:
     """Export workflow results to a multi-sheet Excel report."""
-    payload = build_report_payload(workflow_obj, model_list, original_data)
-    write_report_excel(payload, out_path)
+    payload = build_report_payload_legacy(workflow_obj, model_list, original_data)
+    write_report_excel_legacy(payload, out_path)
+
+
+# The v2 functions intentionally keep the original public names so existing
+# calculator, notebook, and web call sites receive the upgraded workbook.
+# Lazy imports also keep ``aims4pt.reporting.excel_v2`` directly importable.
+def build_report_payload(
+    workflow_obj: workflow_thermobarometry,
+    model_list: list[ModelManager],
+    original_data: pd.DataFrame,
+    *,
+    independent_data: pd.DataFrame | str | Path | None = None,
+    selected_model_threshold: float = 0.05,
+    image_dpi: int = 200,
+) -> ReportPayload:
+    """Build the complete v2 report payload."""
+    from aims4pt.reporting.excel_v2 import build_report_payload as build_v2
+
+    return build_v2(
+        workflow_obj,
+        model_list,
+        original_data,
+        independent_data=independent_data,
+        selected_model_threshold=selected_model_threshold,
+        image_dpi=image_dpi,
+    )
+
+
+def write_report_excel(
+    payload: ReportPayload,
+    output: str | BinaryIO | io.BytesIO,
+) -> None:
+    """Write the complete v2 Excel report."""
+    from aims4pt.reporting.excel_v2 import write_report_excel as write_v2
+
+    write_v2(payload, output)
+
+
+def report_excel(
+    workflow_obj: workflow_thermobarometry,
+    model_list: list[ModelManager],
+    original_data: pd.DataFrame,
+    out_path: str | BinaryIO | io.BytesIO,
+    *,
+    independent_data: pd.DataFrame | str | Path | None = None,
+    selected_model_threshold: float = 0.05,
+    image_dpi: int = 200,
+) -> None:
+    """Export the complete v2 AIMS4PT Excel report."""
+    from aims4pt.reporting.excel_v2 import report_excel as report_v2
+
+    report_v2(
+        workflow_obj,
+        model_list,
+        original_data,
+        out_path,
+        independent_data=independent_data,
+        selected_model_threshold=selected_model_threshold,
+        image_dpi=image_dpi,
+    )

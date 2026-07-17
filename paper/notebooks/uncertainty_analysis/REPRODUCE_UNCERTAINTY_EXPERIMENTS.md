@@ -219,18 +219,23 @@ C:\Users\13493\miniconda3\envs\AIMS4PT\python.exe "paper\notebooks\uncertainty_a
 主文 combined 图的主要设置：
 
 - 3 行 × 2 列：row 1 为 cpx-only，row 2 为 cpx-liq 的 cpx perturbation，row 3 为 cpx-liq 的 liquid perturbation。
-- cpx-only panels 最后一列为 `H2O*`，表示 liquid `H2O_liq` 输入，只被 `Pu08_32b` P 和 `Wan21` T 等选定 cpx-only 模型使用。
-- 灰色方格表示该模型不使用该 feature；这和“使用但敏感性低”的浅蓝/白色格子区分开。主文图不再使用灰色斜线。
-- 灰色方格按 `run_uncertainty_experiments.py` 中的显式 main-text feature table 判定；如果表中该 phase 为 `N.A. in workbook`，则改用对应模型的 `model.standard_columns` 和 `require_water` 判定。
+- 左侧三行标签依次为 `Clinopyroxene perturbation`、`Clinopyroxene perturbation`、`Liquid perturbation`。
+- cpx-only barometry panel 保留 `H2O*` 主列；thermometry 中的 `H2O*`/`H2O` 从主 heatmap 中拆出，作为 panel b 和 panel f 右侧的独立窄 strip。
+- panel b 和 panel f 的 H2O strip 使用独立于主 thermometry heatmap 的共享 H2O 色标；主 thermometry 色标只对应非 H2O 变量。H2O strip 和共享色标使用低饱和绿色系，主 heatmap 保持蓝色系。
+- H2O 共享色标标题为 `H₂O effect on thermometers`。
+- 灰色斜线方格表示该模型不使用该 feature；这和“使用但敏感性低”的浅蓝/白色格子区分开。
+- 灰色斜线方格按 `run_uncertainty_experiments.py` 中的显式 main-text feature table 判定；如果表中该 phase 为 `N.A. in workbook`，则改用对应模型的 `model.standard_columns` 和 `require_water` 判定。
 - 浅灰色但非 unused 的格子表示 QC 和非零 oxide 筛选后没有可用 median，不应解读为模型未使用该 feature。
 - 主文 combined 图也保留 key features 的红色轮廓标识。
 - `H2O_liq` 使用 20% relative error；不要再使用旧的 +/-3 wt.% absolute H2O 图。
+- 主文 combined 图使用 matplotlib 绘制，`figsize=(9, 6)`；PNG/PDF/SVG 均通过 `fig.savefig(..., dpi=600)` 输出。
 - 主文图内部不放 footnote、caption 或 Figure X 这类全局标题；这些解释放到 manuscript caption。
 
 输出：
 
 - `paper/notebooks/uncertainty_analysis/results/uncertainty/analytical/figures_test_subset/analytical_uncertainty_maintext_combined.pdf`
 - `paper/notebooks/uncertainty_analysis/results/uncertainty/analytical/figures_test_subset/analytical_uncertainty_maintext_combined.png`
+- `paper/notebooks/uncertainty_analysis/results/uncertainty/analytical/figures_test_subset/analytical_uncertainty_maintext_combined.svg`
 - `paper/notebooks/uncertainty_analysis/results/uncertainty/analytical/figures_test_subset/test_subset_directional_pm_abs_composite_cpx_only_key_features.png`
 - `paper/notebooks/uncertainty_analysis/results/uncertainty/analytical/figures_test_subset/test_subset_directional_pm_abs_composite_cpx_liq_key_features.png`
 - `paper/notebooks/uncertainty_analysis/results/uncertainty/analytical/directional_key_feature_boxes_nonzero_oxide_counts_test_subset.csv`

@@ -1,6 +1,6 @@
 # AIMS4PT_cpx Paper Notebooks
 
-This directory contains notebooks used for manuscript-related analyses, including dataset preparation, AIMS4PT_cpx resource building, figure reproduction, and the Merapi case study.
+This directory contains notebooks used for manuscript-related analyses, including dataset preparation, AIMS4PT_cpx resource building, figure reproduction, uncertainty tests, and the Merapi case study.
 
 
 ## Important Warning
@@ -18,3 +18,4 @@ Do not run these notebooks unless you understand which intermediate files and tr
 - `02_build_AIMS4PT_cpx_temperature_workflow.ipynb`: builds temperature-model OOD, deviation, and ranking inputs for downstream figures.
 - `03_reproduce_AIMS4PT_cpx_figures.ipynb`: reproduces SHAP, OOD, TAS-OOD, residual, and regression-slope figures.
 - `04_apply_AIMS4PT_cpx_to_Merapi.ipynb`: applies the workflow to Merapi 2006/2010 data and exports case-study figures.
+
