@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import atexit
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -90,6 +91,15 @@ def _stop_server(process: subprocess.Popen[bytes]) -> None:
         process.wait(timeout=10)
 
 
+def _handle_termination_signal(
+    signum: int,
+    frame: object,
+) -> None:
+    """Convert an application termination request into a clean shutdown."""
+    del signum, frame
+    raise KeyboardInterrupt
+
+
 def main() -> None:
     """Launch the local web server and open it in the default browser."""
     host = os.getenv("AIMS4PT_WEB_HOST", DEFAULT_HOST)
@@ -100,6 +110,7 @@ def main() -> None:
     print(f"Starting AIMS4PT web server at {url}")
     process = _start_server(host, port)
     atexit.register(_stop_server, process)
+    signal.signal(signal.SIGTERM, _handle_termination_signal)
 
     try:
         _wait_until_ready(url, process)

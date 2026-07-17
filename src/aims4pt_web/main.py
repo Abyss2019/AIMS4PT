@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as distribution_version
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -19,9 +21,15 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 
+try:
+    app_version = distribution_version("AIMS4PT")
+except PackageNotFoundError:
+    app_version = "0.0.0"
+
 app = FastAPI(
     title="AIMS4PT_cpx Web Calculator",
     description="Lightweight local and production web interface for AIMS4PT_cpx.",
+    version=app_version,
 )
 
 static_dir = Path(__file__).resolve().parent / "static"
