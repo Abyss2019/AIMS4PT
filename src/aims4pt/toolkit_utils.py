@@ -38,7 +38,6 @@ from tkinter import simpledialog
 import numpy as np
 
 
-from IPython.display import display
 from matplotlib import pyplot as plt
 
 from aims4pt.constants import Custom_cycle
@@ -113,7 +112,6 @@ def manually_input_sths(input_mode="auto", **kwargs):
             A dictionary containing user inputs for the provided keys.
             Example: `{'x_label': 'default_x', 'y_label': 'user_input'}`
     """
-    import ipywidgets as widgets
     # Helper function for terminal input
     def terminal_input(keys_with_defaults):
         inputs = {}
@@ -136,6 +134,9 @@ def manually_input_sths(input_mode="auto", **kwargs):
 
     # Helper function for Notebook input
     def notebook_input(keys_with_defaults):
+        import ipywidgets as widgets
+        from IPython.display import display
+
         inputs = {}
         widgets_dict = {}
         submit_button = widgets.Button(description="Submit")
