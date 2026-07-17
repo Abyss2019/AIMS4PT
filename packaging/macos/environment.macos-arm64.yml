@@ -1,6 +1,7 @@
 name: aims4pt-macos-arm64
 channels:
   - conda-forge
+  - nodefaults
 
 dependencies:
   - python=3.10
@@ -13,12 +14,13 @@ dependencies:
   - numpy>=1.24,<2.1
   - pandas>=2.3,<2.4
   - scipy
-  - matplotlib
+  - matplotlib>=3.8,<3.9
   - cycler
   - scikit-learn=1.5.1
   - openpyxl
   - xlsxwriter
   - periodictable
+  - pyrolite=0.3.6
   - seaborn
   - joblib
   - py-xgboost>=3.2,<3.3
@@ -44,4 +46,3 @@ dependencies:
   - pip:
       - "tensorflow>=2.21,<2.22"
       - "keras>=3.12,<3.13"
-      - pyrolite
