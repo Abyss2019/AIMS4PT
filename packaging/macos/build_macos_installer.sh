@@ -244,6 +244,9 @@ runtime_env_args() {
   if [[ -d "${prefix}/lib/R" ]]; then
     printf '%s\0' "R_HOME=${prefix}/lib/R"
   fi
+  if [[ -x "${prefix}/bin/java" ]]; then
+    printf '%s\0' "JAVA_HOME=${prefix}"
+  fi
 }
 
 run_with_runtime() {
@@ -298,7 +301,7 @@ run_uvicorn_smoke_test() {
       sed -n '1,200p' "${SERVER_STDERR}" >&2 || true
       die "uvicorn exited before readiness."
     fi
-    if curl -fsS --max-time 2 "${url}" >/dev/null 2>&1; then
+    if /usr/bin/curl --noproxy "*" -fsS --max-time 2 "${url}" >/dev/null 2>&1; then
       echo "uvicorn_ready ${url}"
       kill -TERM "${pid}" >/dev/null 2>&1 || true
       wait "${pid}" >/dev/null 2>&1 || true
@@ -329,6 +332,9 @@ export DYLD_FALLBACK_LIBRARY_PATH="${RUNTIME_DIR}/lib:${DYLD_FALLBACK_LIBRARY_PA
 
 if [[ -d "${RUNTIME_DIR}/lib/R" ]]; then
   export R_HOME="${RUNTIME_DIR}/lib/R"
+fi
+if [[ -x "${RUNTIME_DIR}/bin/java" ]]; then
+  export JAVA_HOME="${RUNTIME_DIR}"
 fi
 
 cd -- "${HOME}"
@@ -374,6 +380,9 @@ export DYLD_FALLBACK_LIBRARY_PATH="${RUNTIME_DIR}/lib:${DYLD_FALLBACK_LIBRARY_PA
 
 if [[ -d "${RUNTIME_DIR}/lib/R" ]]; then
   export R_HOME="${RUNTIME_DIR}/lib/R"
+fi
+if [[ -x "${RUNTIME_DIR}/bin/java" ]]; then
+  export JAVA_HOME="${RUNTIME_DIR}"
 fi
 
 cd -- "${HOME}"
@@ -545,6 +554,7 @@ write_step "Temporary archive size: $(format_gib "${archive_size}")"
 if [[ -n "${CLEANUP_ROOT}" ]]; then
   write_step "Removing ephemeral environment root to free disk space"
   remove_directory_safe "${CLEANUP_ROOT}" "${RUNNER_TEMP}"
+  hash -r
 fi
 
 write_step "Creating installer payload"
