@@ -2,19 +2,40 @@
 
 This repository contains the code and supporting resources for **AIMS4PT_cpx**, an AI-assisted model-selection framework for clinopyroxene-based pressure–temperature (P–T) estimation. The framework evaluates the applicability of published clinopyroxene-only and clinopyroxene–liquid thermobarometers to a given dataset, runs P–T calculations, and exports reports for model selection and calculation.
 
+![Overview of AIMS4PT_cpx](./web/fig_1_aims4pt_workflow_complex%202026-07-11.png)
+
+*Note: Basic use of AIMS4PT_cpx requires at least 4 GB of memory; 8 GB or more is recommended.*
+
+
+## Standalone Windows and macOS applications
+
+Built on the [graphical web interface](#Graphical-web-interface), AIMS4PT_cpx is distributed as a standalone application for Windows and macOS (implemented with [PyInstaller](https://www.pyinstaller.org/)). No command-line or python environment setup is required: simply download the appropriate installer, install the application, and launch it normally.
+
+
+Installers are published on the [releases page](https://github.com/aims4pt/aims4pt_cpx/releases) when available:
+
+- **Windows 64-bit (x64):** `AIMS4PT_cpx-<version>-Windows-x64-Setup.exe`
+- **macOS Apple Silicon (arm64):** `AIMS4PT_cpx-<version>-macOS-arm64.dmg`
+
 ## Repository Layout
 
 - `calculator.ipynb`: User-friendly calculator notebook. This is the recommended entry point for applying AIMS4PT_cpx to new datasets.
 - `input.xlsx`: Input template for `calculator.ipynb`.
 - `src/aims4pt/`: Python source code for AIMS4PT. This includes thermobarometer models, out-of-distribution (OOD) and deviation prediction tools, data-processing utilities, visualization helpers, and Excel report generation.
-- `src/aims4pt/model_tools/trained_model/`: Trained AIMS4PT_cpx resources, including OOD detectors, deviation predictors, and SHAP results. Standard calculations use these files directly.
-- `paper/`: Materials used for manuscript-related analyses, including public datasets and workflow notebooks.
+- `src/aims4pt/model_tools/trained_model/`: Trained AIMS4PT_cpx resources, including OOD detectors, deviation predictors, and SHAP results. Calculations use these files directly.
+- `paper/`: Materials used for manuscript-related analyses.
 
-## Installation
+## Installation the python package
 
-Basic use of AIMS4PT_cpx requires at least 4 GB of memory; 8 GB or more is recommended.
+Install [Miniconda](https://docs.conda.io/en/latest/miniconda.html) or [Anaconda](https://www.anaconda.com/products/distribution) if you do not already have a conda environment manager installed.
 
-Create the conda environment from the provided environment file:
+Download the zip file of all source code or clone the repository (if you have Git installed):
+
+```bash
+git clone https://github.com/Abyss2019/AIMS4PT.git
+```
+
+Then navigate to the repository root, and create the conda environment from the provided environment file:
 
 ```bash
 conda env create -f environment.base.yml
