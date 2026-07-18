@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "AIMS4PT"
-version = "0.1.0"
+version = "0.2.0"
 description = "AIMS4PT codebase for selecting suitable mineral-based thermobarometers, including the AIMS4PT-cpx workflow."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -19,13 +19,13 @@ dependencies = [
   "numpy>=1.24,<2.1",
   "pandas>=2.3,<2.4",
   "scipy",
-  "matplotlib",
+  "matplotlib>=3.8,<3.9",
   "cycler",
   "scikit-learn==1.5.1",
   "openpyxl",
   "xlsxwriter",
   "periodictable",
-  "pyrolite",
+  "pyrolite>=0.3.6,<0.3.7",
   "seaborn",
   "joblib",
   "xgboost>=3.2,<3.3",

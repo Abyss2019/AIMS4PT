@@ -1,0 +1,137 @@
+name: Build macOS arm64 installer
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/macos-arm64
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-arm64-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and verify Apple Silicon pkg
+    runs-on: macos-15
+    timeout-minutes: 240
+
+    defaults:
+      run:
+        shell: bash -el {0}
+
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: "1"
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          lfs: false
+
+      - name: Verify native Apple Silicon runner
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = "Darwin"
+          test "$(uname -m)" = "arm64"
+          sw_vers
+          df -h /
+
+      - name: Create release environment
+        uses: mamba-org/setup-micromamba@v3
+        with:
+          environment-file: packaging/macos/environment.macos-arm64.yml
+          environment-name: aims4pt-macos-arm64
+          micromamba-root-path: ${{ runner.temp }}/micromamba
+          micromamba-binary-path: ${{ runner.temp }}/micromamba-bin/micromamba
+          cache-downloads: false
+          cache-environment: false
+          post-cleanup: none
+          init-shell: bash
+
+      - name: Install archived extraTrees R package
+        run: |
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/extraTrees_1.0.5.tar.gz"
+          curl \
+            --fail \
+            --location \
+            --retry 3 \
+            --output "${archive}" \
+            "https://cran.r-project.org/src/contrib/Archive/extraTrees/extraTrees_1.0.5.tar.gz"
+          echo "9dfd216e5853026e68e0a91811c7936b08750d3027d8d0a243302299aeb87be7  ${archive}" \
+            | shasum -a 256 -c -
+          R CMD INSTALL "${archive}"
+          Rscript -e 'stopifnot(requireNamespace("extraTrees", quietly=TRUE))'
+          rm -f -- "${archive}"
+
+      - name: Install AIMS4PT non-editably
+        run: |
+          set -euo pipefail
+          python -m pip install \
+            --no-cache-dir \
+            --no-deps \
+            --no-build-isolation \
+            .
+          python -m pip check
+
+          version="$(
+            python -c 'from importlib.metadata import version; print(version("AIMS4PT"))'
+          )"
+          echo "AIMS4PT_VERSION=${version}" >> "${GITHUB_ENV}"
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            test "${GITHUB_REF_NAME}" = "v${version}"
+          fi
+
+      - name: Reclaim package-manager cache
+        run: |
+          set -euo pipefail
+          python -m pip cache purge || true
+          # Keep extracted packages because conda-pack needs the package cache.
+          micromamba clean --tarballs --yes
+          df -h /
+
+      - name: Build and verify installer
+        run: |
+          set -euo pipefail
+          bash packaging/macos/build_macos_installer.sh \
+            --env-prefix "${CONDA_PREFIX}" \
+            --stage-root "${RUNNER_TEMP}/A4PTm" \
+            --cleanup-root "${RUNNER_TEMP}/micromamba" \
+            --verify-install
+          df -h /
+
+      - name: Upload installer artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: AIMS4PT_cpx-${{ env.AIMS4PT_VERSION }}-macOS-arm64
+          path: |
+            dist/AIMS4PT_cpx-*-macOS-arm64.dmg
+            dist/AIMS4PT_cpx-*-macOS-arm64.dmg.part-*
+            dist/AIMS4PT_cpx-*-macOS-arm64-SHA256.txt
+            dist/AIMS4PT_cpx-*-macOS-arm64-PARTS-SHA256.txt
+            dist/AIMS4PT_cpx-*-macOS-arm64-reassemble.sh
+            dist/AIMS4PT_cpx-*-macOS-arm64-BUILD-INFO.txt
+            dist/AIMS4PT_cpx-*-macOS-arm64-DEPENDENCIES.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: macOS-arm64-build-diagnostics
+          path: |
+            ${{ runner.temp }}/A4PTm/*.log
+          if-no-files-found: ignore
+          retention-days: 7
