@@ -9,7 +9,7 @@ This repository contains the code and supporting resources for **AIMS4PT_cpx**, 
 
 ## Standalone Windows and macOS applications
 
-Built on the [graphical web interface](#Graphical-web-interface), AIMS4PT_cpx is distributed as a standalone application for Windows and macOS (implemented with [PyInstaller](https://www.pyinstaller.org/)). No command-line or python environment setup is required: simply download the appropriate installer, install the application, and launch it normally.
+Built on the [graphical web interface](#Graphical-Web-Interface), AIMS4PT_cpx is distributed as a standalone application for Windows and macOS (implemented with [PyInstaller](https://www.pyinstaller.org/)). No command-line or python environment setup is required: simply download the appropriate installer, install the application, and launch it normally.
 
 
 Installers are published on the [releases page](https://github.com/aims4pt/aims4pt_cpx/releases) when available:
@@ -25,7 +25,7 @@ Installers are published on the [releases page](https://github.com/aims4pt/aims4
 - `src/aims4pt/model_tools/trained_model/`: Trained AIMS4PT_cpx resources, including OOD detectors, deviation predictors, and SHAP results. Calculations use these files directly.
 - `paper/`: Materials used for manuscript-related analyses.
 
-## Installation the python package
+## Installation the Python Package
 
 Install [Miniconda](https://docs.conda.io/en/latest/miniconda.html) or [Anaconda](https://www.anaconda.com/products/distribution) if you do not already have a conda environment manager installed.
 
@@ -50,7 +50,7 @@ pip install .
 
 ## Basic Usage
 
-### Jupyter notebooks
+### Jupyter Notebooks
 
 For routine application of the AIMS4PT_cpx framework described in the manuscript, use the root-level `calculator.ipynb` notebook:
 
@@ -62,7 +62,7 @@ For routine application of the AIMS4PT_cpx framework described in the manuscript
 
 Most users do not need to run the notebooks in `paper/notebooks/`.
 
-### Graphical web interface
+### Graphical Web Interface
 
 A lightweight web interface is available for users who prefer a graphical workflow. The web app supports input-file validation, one-click calculation runs, and report downloads from a browser. It can be run locally and is also intended as the basis for future server deployment.
 
