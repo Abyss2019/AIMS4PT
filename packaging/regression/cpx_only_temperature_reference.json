@@ -1,0 +1,31 @@
+{
+  "absolute_tolerance": 0.25,
+  "case_id": "example1-cpx-only-temperature",
+  "expected": {
+    "Chicchi et al., 2023 (cpx_only)": 1100.0,
+    "Petrelli et al., 2020 (cpx_only)": 1091.732307692323,
+    "Putirka, 2008 eq32d_T; eq32a_P (cpx_only)": 1191.734455220004,
+    "Putirka, 2008 eq32d_T; eq32b_P (cpx_only)": 1179.242517527259,
+    "Wang et al., 2021 (cpx_only)": 1160.834144071437,
+    "Ágreda-López et al., 2024 (cpx_only)": 1076.685791015625
+  },
+  "if_hydrous": false,
+  "input_cpx": {
+    "Al2O3_cpx": 3.98,
+    "CaO_cpx": 20.33,
+    "Cr2O3_cpx": 0.0,
+    "FeOt_cpx": 7.72,
+    "K2O_cpx": 0.06,
+    "MgO_cpx": 15.44,
+    "MnO_cpx": 0.22,
+    "Na2O_cpx": 0.35,
+    "SiO2_cpx": 52.06,
+    "TiO2_cpx": 0.83
+  },
+  "melt_tas": "Andesite",
+  "method_type": "cpx_only",
+  "relative_tolerance": 1e-05,
+  "schema_version": 1,
+  "target": "T",
+  "units": "degrees_C"
+}

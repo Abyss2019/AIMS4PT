@@ -121,6 +121,7 @@ jobs:
             dist/AIMS4PT_cpx-*-macOS-arm64-PARTS-SHA256.txt
             dist/AIMS4PT_cpx-*-macOS-arm64-reassemble.sh
             dist/AIMS4PT_cpx-*-macOS-arm64-BUILD-INFO.txt
+            dist/AIMS4PT_cpx-*-macOS-arm64-DEPENDENCIES.json
           if-no-files-found: error
           compression-level: 0
           retention-days: 14

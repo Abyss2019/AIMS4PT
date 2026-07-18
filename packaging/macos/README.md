@@ -15,10 +15,14 @@ The workflow:
 1. creates the release environment;
 2. installs AIMS4PT non-editably;
 3. validates Python, TensorFlow, R, model imports, resources, and uvicorn;
-4. packages the relocatable environment into a macOS installer;
-5. installs the generated pkg on the ephemeral runner and repeats the checks;
-6. wraps the verified pkg in a disk image;
-7. uploads the dmg and SHA-256 metadata as a workflow artifact.
+4. compares representative analytical, ML, ONNX, and TensorFlow predictions
+   with the shared fixed cross-platform reference case;
+5. records the exact conda and Python dependency manifest;
+6. packages the relocatable environment into a macOS installer;
+7. installs the generated pkg on the ephemeral runner and repeats the checks;
+8. wraps the verified pkg in a disk image;
+9. uploads the dmg, dependency manifest, and SHA-256 metadata as a workflow
+   artifact.
 
 ## Output
 

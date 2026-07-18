@@ -206,6 +206,7 @@ CHECKSUM_PATH="${DIST_DIR}/${PACKAGE_BASE_NAME}-SHA256.txt"
 PARTS_CHECKSUM_PATH="${DIST_DIR}/${PACKAGE_BASE_NAME}-PARTS-SHA256.txt"
 REASSEMBLE_PATH="${DIST_DIR}/${PACKAGE_BASE_NAME}-reassemble.sh"
 BUILD_INFO_PATH="${DIST_DIR}/${PACKAGE_BASE_NAME}-BUILD-INFO.txt"
+DEPENDENCY_MANIFEST_PATH="${DIST_DIR}/${PACKAGE_BASE_NAME}-DEPENDENCIES.json"
 
 ARCHIVE_PATH="${STAGE_ROOT}/env.tar.gz"
 PKG_ROOT="${STAGE_ROOT}/pkg-root"
@@ -213,7 +214,9 @@ PKG_SCRIPTS_DIR="${STAGE_ROOT}/pkg-scripts"
 DMG_ROOT="${STAGE_ROOT}/dmg-root"
 STAGED_RUNTIME="${PKG_ROOT}${INSTALL_DIR}"
 STAGED_APP="${PKG_ROOT}${APP_BUNDLE}"
-SMOKE_TEST="${SCRIPT_DIR}/smoke_test.py"
+SMOKE_TEST="${SCRIPT_DIR}/runtime_smoke.py"
+REGRESSION_TEST="${REPO_ROOT}/packaging/regression/cross_platform_regression.py"
+DEPENDENCY_MANIFEST_SCRIPT="${REPO_ROOT}/packaging/common/write_dependency_manifest.py"
 SERVER_STDOUT="${STAGE_ROOT}/uvicorn-smoke.stdout.log"
 SERVER_STDERR="${STAGE_ROOT}/uvicorn-smoke.stderr.log"
 
@@ -270,6 +273,14 @@ run_runtime_smoke_test() {
     "${SMOKE_TEST}" \
     --expected-version "${PRODUCT_VERSION}" \
     --expected-prefix "${prefix}"
+}
+
+run_numerical_regression_test() {
+  local prefix="$1"
+  run_with_runtime \
+    "${prefix}" \
+    "${prefix}/bin/python" \
+    "${REGRESSION_TEST}"
 }
 
 run_uvicorn_smoke_test() {
@@ -500,9 +511,22 @@ if [[ "${SKIP_SMOKE_TEST}" -eq 0 ]]; then
   write_step "Running release environment smoke test"
   run_runtime_smoke_test "${ENV_PREFIX}"
 
+  write_step "Running release environment numerical regression test"
+  run_numerical_regression_test "${ENV_PREFIX}"
+
   write_step "Running release environment uvicorn smoke test"
   run_uvicorn_smoke_test "${ENV_PREFIX}"
 fi
+
+rm -f -- "${DEPENDENCY_MANIFEST_PATH}"
+write_step "Recording the exact macOS release dependency manifest"
+run_with_runtime \
+  "${ENV_PREFIX}" \
+  "${ENV_PREFIX}/bin/python" \
+  "${DEPENDENCY_MANIFEST_SCRIPT}" \
+  --output "${DEPENDENCY_MANIFEST_PATH}" \
+  --prefix "${ENV_PREFIX}" \
+  --label "${PRODUCT_NAME} ${PRODUCT_VERSION} macOS arm64"
 
 CONDA_PACK="$(find_conda_pack)"
 remove_directory_safe "${PKG_ROOT}" "${STAGE_ROOT}"
@@ -626,6 +650,9 @@ if [[ "${VERIFY_INSTALL}" -eq 1 ]]; then
     write_step "Running installed runtime smoke test"
     run_runtime_smoke_test "${INSTALL_DIR}"
 
+    write_step "Running installed numerical regression test"
+    run_numerical_regression_test "${INSTALL_DIR}"
+
     write_step "Running installed uvicorn smoke test"
     run_uvicorn_smoke_test "${INSTALL_DIR}"
   fi
@@ -683,6 +710,8 @@ InstallerInsideDMG=yes
 InstallerSigned=$([[ -n "${INSTALLER_SIGN_IDENTITY}" ]] && echo yes || echo no)
 ApplicationSigningIdentity=${APP_SIGN_IDENTITY}
 Notarized=no
+DependencyManifest=$(basename -- "${DEPENDENCY_MANIFEST_PATH}")
+NumericalRegressionReference=$(basename -- "${REPO_ROOT}/packaging/regression/cpx_only_temperature_reference.json")
 EOF
 
 if [[ "${FORCE_SPLIT}" -eq 1 || "${dmg_size}" -gt "${SPLIT_LIMIT_BYTES}" ]]; then
