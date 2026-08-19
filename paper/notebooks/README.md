@@ -11,7 +11,7 @@ Do not run these notebooks unless you understand which intermediate files and tr
 - `03_reproduce_AIMS4PT_cpx_figures.ipynb` depends on outputs from the preceding workflow notebooks and is intended for manuscript figure reproduction, not routine calculation.
 - `01_build_AIMS4PT_cpx_pressure_workflow.ipynb` is also a pressure-workflow rebuilding entry point and is not intended for routine use.
 
-## Notebook Roles
+## Notebooks
 
 - `00_independent_dataset.ipynb`: prepares the independent experimental dataset, runs clinopyroxene-liquid equilibrium checks, and generates dataset/calibration comparison figures.
 - `01_build_AIMS4PT_cpx_pressure_workflow.ipynb`: builds pressure-model OOD, deviation, and ranking inputs for downstream figures.
