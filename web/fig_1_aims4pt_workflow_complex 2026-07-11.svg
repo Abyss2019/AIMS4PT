@@ -1,0 +1,1709 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   width="1800"
+   height="745"
+   viewBox="0 0 1800 744.99998"
+   role="img"
+   aria-labelledby="title desc"
+   version="1.1"
+   id="svg118"
+   sodipodi:docname="fig_1_aims4pt_workflow_complex 2026-07-11.svg"
+   inkscape:version="1.3 (0e150ed6c4, 2023-07-21)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:cc="http://creativecommons.org/ns#"
+   xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <sodipodi:namedview
+     id="namedview118"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="0.80638889"
+     inkscape:cx="786.22115"
+     inkscape:cy="150.67172"
+     inkscape:window-width="3840"
+     inkscape:window-height="2054"
+     inkscape:window-x="2869"
+     inkscape:window-y="-11"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg118">
+    <inkscape:page
+       x="0"
+       y="0"
+       width="1800"
+       height="745"
+       id="page181"
+       margin="0 0 6.3876087e-07"
+       bleed="0"
+       inkscape:export-filename="fig_1_aims4pt_workflow_complex 2026-07-11.pdf"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+  </sodipodi:namedview>
+  <title
+     id="title">AIMS4PT_cpx workflow with prerequisite dependencies</title>
+  <desc
+     id="desc">A concise publication schematic with pale dashed arrows linking prerequisite inputs, reusable resources, model checks, and reporting guidance.</desc>
+  <defs
+     id="defs2">
+    <rect
+       x="1573.0623"
+       y="1045.4012"
+       width="158.1123"
+       height="43.403378"
+       id="rect169" />
+    <rect
+       x="385.38904"
+       y="966.76086"
+       width="45.597794"
+       height="41.651829"
+       id="rect150" />
+    <marker
+       style="overflow:visible"
+       id="ArrowWide"
+       refX="0"
+       refY="0"
+       orient="auto-start-reverse"
+       inkscape:stockid="Wide arrow"
+       markerWidth="1"
+       markerHeight="1"
+       viewBox="0 0 1 1"
+       inkscape:isstock="true"
+       inkscape:collect="always"
+       preserveAspectRatio="xMidYMid">
+      <path
+         style="fill:none;stroke:context-stroke;stroke-width:1;stroke-linecap:butt"
+         d="M 3,-3 0,0 3,3"
+         transform="rotate(180,0.125,0)"
+         sodipodi:nodetypes="ccc"
+         id="path126" />
+    </marker>
+    <marker
+       style="overflow:visible"
+       id="RoundedArrow"
+       refX="0"
+       refY="0"
+       orient="auto-start-reverse"
+       inkscape:stockid="Rounded arrow"
+       markerWidth="1"
+       markerHeight="1"
+       viewBox="0 0 1 1"
+       inkscape:isstock="true"
+       inkscape:collect="always"
+       preserveAspectRatio="xMidYMid">
+      <path
+         transform="scale(0.7)"
+         d="m -0.21114562,-4.1055728 6.42229122,3.21114561 a 1,1 90 0 1 0,1.78885438 L -0.21114562,4.1055728 A 1.236068,1.236068 31.717474 0 1 -2,3 v -6 a 1.236068,1.236068 148.28253 0 1 1.78885438,-1.1055728 z"
+         style="fill:context-stroke;fill-rule:evenodd;stroke:none"
+         id="path8" />
+    </marker>
+    <rect
+       x="1391.2693"
+       y="206.67645"
+       width="31.034485"
+       height="23.110786"
+       id="rect80" />
+    <marker
+       id="arrow"
+       markerWidth="9"
+       markerHeight="9"
+       refX="10"
+       refY="6"
+       orient="auto"
+       markerUnits="strokeWidth">
+      <path
+         d="m 2,2 8,4 -8,4 z"
+         fill="#2f3336"
+         id="path1" />
+    </marker>
+    <marker
+       id="arrow-grey"
+       markerWidth="6"
+       markerHeight="6"
+       refX="10"
+       refY="6"
+       orient="auto"
+       markerUnits="strokeWidth"
+       viewBox="0 0 8 8"
+       preserveAspectRatio="xMidYMid">
+      <path
+         d="m 2,2 8,4 -8,4 z"
+         fill="#69747c"
+         id="path2" />
+    </marker>
+    <style
+       id="style2">&#10;      .page { fill: #FFFFFF; }&#10;      .outer { fill: none; stroke: #2F3336; stroke-width: 2.2; }&#10;      .panel { fill: #FFFFFF; stroke: #2F3336; stroke-width: 1.8; }&#10;      .panel-head { fill: #F7F9FA; stroke: #2F3336; stroke-width: 1.8; }&#10;      .stage { fill: #FBFCFD; stroke: #8A969F; stroke-width: 1.4; }&#10;      .stage-head { fill: #F5F7F8; stroke: #8A969F; stroke-width: 1.4; }&#10;      .panel-title { font: 700 25px Arial, Helvetica, sans-serif; fill: #1F2326; }&#10;      .stage-title { font: 700 18px Arial, Helvetica, sans-serif; fill: #1F2326; }&#10;      .box-title { font: 700 17px Arial, Helvetica, sans-serif; fill: #1F2326; }&#10;      .box-label { font: 700 14px Arial, Helvetica, sans-serif; fill: #30363A; }&#10;      .box-text { font: 400 15px Arial, Helvetica, sans-serif; fill: #30363A; }&#10;      .small { font: 400 13px Arial, Helvetica, sans-serif; fill: #4B5358; }&#10;      .tiny { font: 400 12px Arial, Helvetica, sans-serif; fill: #4B5358; }&#10;      .model { fill: #E8E0F2; stroke: #7761A2; stroke-width: 1.8; }&#10;      .data { fill: #D5EBF3; stroke: #3986A8; stroke-width: 1.8; }&#10;      .process { fill: #DDEFD9; stroke: #60985C; stroke-width: 1.8; }&#10;      .rule { fill: #FFF1C2; stroke: #C58A1A; stroke-width: 1.8; }&#10;      .software { fill: #D9E5EB; stroke: #6E8897; stroke-width: 1.8; }&#10;      .output { fill: #F7D9D4; stroke: #BD554E; stroke-width: 1.8; }&#10;      .neutral { fill: #F1F4F5; stroke: #8A969F; stroke-width: 1.6; }&#10;      .arrow { stroke: #2F3336; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }&#10;      .arrow-thin { stroke: #69747C; stroke-width: 1.7; fill: none; marker-end: url(#arrow-grey); }&#10;    </style>
+    <marker
+       id="arrow-5"
+       markerWidth="8"
+       markerHeight="8"
+       refX="10"
+       refY="6"
+       orient="auto"
+       markerUnits="strokeWidth"
+       viewBox="0 0 8 8"
+       preserveAspectRatio="xMidYMid">
+      <path
+         d="m 2,2 8,4 -8,4 z"
+         fill="#2f3336"
+         id="path1-5" />
+    </marker>
+    <marker
+       id="arrow-dependency"
+       markerWidth="6"
+       markerHeight="6"
+       refX="7"
+       refY="4"
+       orient="auto"
+       markerUnits="userSpaceOnUse"
+       viewBox="0 0 6 6"
+       preserveAspectRatio="xMidYMid">
+      <path
+         d="M 1,1 7,4 1,7 Z"
+         fill="#8ea5b1"
+         id="path-arrow-dependency" />
+    </marker>
+    <marker
+       id="arrow-58"
+       markerWidth="8"
+       markerHeight="8"
+       refX="10"
+       refY="6"
+       orient="auto"
+       markerUnits="strokeWidth"
+       viewBox="0 0 8 8"
+       preserveAspectRatio="xMidYMid">
+      <path
+         d="m 2,2 8,4 -8,4 z"
+         fill="#2f3336"
+         id="path1-59" />
+    </marker>
+    <marker
+       id="arrow-grey-0"
+       markerWidth="3"
+       markerHeight="3"
+       refX="10"
+       refY="6"
+       orient="auto"
+       markerUnits="strokeWidth"
+       viewBox="0 0 8 8"
+       preserveAspectRatio="xMidYMid">
+      <path
+         d="m 2,2 8,4 -8,4 z"
+         fill="#69747c"
+         id="path2-1" />
+    </marker>
+    <marker
+       id="arrow-6"
+       markerWidth="4"
+       markerHeight="4"
+       refX="10"
+       refY="6"
+       orient="auto"
+       markerUnits="strokeWidth">
+      <path
+         d="m 2,2 8,4 -8,4 z"
+         fill="#2f3336"
+         id="path1-3" />
+    </marker>
+    <marker
+       id="arrow-7"
+       markerWidth="5"
+       markerHeight="5"
+       refX="10"
+       refY="6"
+       orient="auto"
+       markerUnits="strokeWidth">
+      <path
+         d="m 2,2 8,4 -8,4 z"
+         fill="#2f3336"
+         id="path1-9" />
+    </marker>
+    <marker
+       id="arrow-grey-2"
+       markerWidth="6"
+       markerHeight="6"
+       refX="10"
+       refY="6"
+       orient="auto"
+       markerUnits="strokeWidth"
+       viewBox="0 0 8 8"
+       preserveAspectRatio="xMidYMid">
+      <path
+         d="m 2,2 8,4 -8,4 z"
+         fill="#69747c"
+         id="path2-9" />
+    </marker>
+    <marker
+       id="arrow-grey-2-6"
+       markerWidth="6"
+       markerHeight="6"
+       refX="10"
+       refY="6"
+       orient="auto"
+       markerUnits="strokeWidth"
+       viewBox="0 0 8 8"
+       preserveAspectRatio="xMidYMid">
+      <path
+         d="m 2,2 8,4 -8,4 z"
+         fill="#69747c"
+         id="path2-9-7" />
+    </marker>
+    <marker
+       id="arrow-grey-23"
+       markerWidth="6"
+       markerHeight="6"
+       refX="10"
+       refY="6"
+       orient="auto"
+       markerUnits="strokeWidth"
+       viewBox="0 0 8 8"
+       preserveAspectRatio="xMidYMid">
+      <path
+         d="m 2,2 8,4 -8,4 z"
+         fill="#69747c"
+         id="path2-17" />
+    </marker>
+    <marker
+       id="arrow-grey-2-6-7"
+       markerWidth="6"
+       markerHeight="6"
+       refX="10"
+       refY="6"
+       orient="auto"
+       markerUnits="strokeWidth"
+       viewBox="0 0 8 8"
+       preserveAspectRatio="xMidYMid">
+      <path
+         d="m 2,2 8,4 -8,4 z"
+         fill="#69747c"
+         id="path2-9-7-0" />
+    </marker>
+    <marker
+       id="arrow-3"
+       markerWidth="9"
+       markerHeight="9"
+       refX="10"
+       refY="6"
+       orient="auto"
+       markerUnits="strokeWidth">
+      <path
+         d="m 2,2 8,4 -8,4 z"
+         fill="#2f3336"
+         id="path1-64" />
+    </marker>
+    <marker
+       id="arrow-8"
+       markerWidth="9"
+       markerHeight="9"
+       refX="10"
+       refY="6"
+       orient="auto"
+       markerUnits="strokeWidth">
+      <path
+         d="m 2,2 8,4 -8,4 z"
+         fill="#2f3336"
+         id="path1-8" />
+    </marker>
+    <marker
+       id="arrow-80"
+       markerWidth="9"
+       markerHeight="9"
+       refX="10"
+       refY="6"
+       orient="auto"
+       markerUnits="strokeWidth">
+      <path
+         d="m 2,2 8,4 -8,4 z"
+         fill="#2f3336"
+         id="path1-51" />
+    </marker>
+    <marker
+       id="arrow-57"
+       markerWidth="9"
+       markerHeight="9"
+       refX="10"
+       refY="6"
+       orient="auto"
+       markerUnits="strokeWidth">
+      <path
+         d="m 2,2 8,4 -8,4 z"
+         fill="#2f3336"
+         id="path1-0" />
+    </marker>
+  </defs>
+  <rect
+     class="page"
+     x="0"
+     y="0"
+     width="1800"
+     height="745.94409"
+     id="rect2" />
+  <rect
+     class="outer"
+     x="36.00552"
+     y="34.00552"
+     width="1727.9889"
+     height="676.20593"
+     id="rect3" />
+  <!-- Panel a: framework resources and parallel access routes -->
+  <!-- Panel b: two-step sample-wise model selection -->
+  <!-- Panel c: balanced set-level reporting outcomes -->
+  <path
+     class="arrow"
+     d="m 440.48234,1162.8419 v -31.3931 H 716.8499 c 6.8677,11.7785 14.47699,15.0289 23.67578,0 H 902.4722 v -90.9984"
+     id="path79-0-4"
+     sodipodi:nodetypes="cccccc"
+     style="font-variation-settings:normal;opacity:1;vector-effect:none;fill:none;fill-opacity:1;stroke:#2f3336;stroke-width:2.2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;-inkscape-stroke:none;marker-end:url(#arrow);stop-color:#000000;stop-opacity:1" />
+  <g
+     id="g151"
+     transform="translate(1716.9322,-51.735956)">
+    <g
+       id="g148"
+       transform="translate(-38.181606,-26.527675)">
+      <rect
+         class="neutral"
+         x="280.02167"
+         y="935.09747"
+         width="145.05426"
+         height="74.662491"
+         rx="4.0019007"
+         id="rect64-2-8"
+         style="fill:#f1f4f5;stroke:#8a969f;stroke-width:1.6" />
+      <text
+         xml:space="preserve"
+         style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif;-inkscape-font-specification:'Arial, Helvetica, sans-serif Italic';font-variant-ligatures:normal;font-variant-position:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-alternates:normal;font-variant-east-asian:normal;font-feature-settings:normal;font-variation-settings:normal;text-indent:0;text-align:center;text-decoration-line:none;text-decoration-style:solid;text-decoration-color:#000000;letter-spacing:normal;word-spacing:normal;text-transform:none;writing-mode:lr-tb;direction:ltr;text-orientation:mixed;dominant-baseline:auto;baseline-shift:baseline;text-anchor:end;white-space:pre;inline-size:166.27;display:inline;opacity:1;vector-effect:none;fill:#33393d;fill-opacity:1;stroke:none;stroke-width:1;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;-inkscape-stroke:none;marker-end:url(#arrow);stop-color:#000000;stop-opacity:1"
+         x="403.58551"
+         y="990.99042"
+         id="text146"
+         transform="translate(32.110077,-24.807944)"><tspan
+           x="403.58551"
+           y="990.99042"
+           id="tspan7"><tspan
+   style="text-anchor:middle"
+   id="tspan6">Sparse-model</tspan><tspan
+   y="990.99042"
+   id="tspan8"> </tspan></tspan><tspan
+           x="403.58551"
+           y="1012.2817"
+           id="tspan10"><tspan
+             style="text-anchor:middle"
+             id="tspan9">filtering (&lt;5%)</tspan></tspan></text>
+    </g>
+    <path
+       class="arrow-thin"
+       d="m 314.36719,884.84955 v 23.63064"
+       id="path81-2"
+       style="fill:none;stroke:#69747c;stroke-width:1.80334;marker-end:url(#arrow-grey-23)" />
+  </g>
+  <g
+     id="panel-b"
+     inkscape:transform-center-x="55.184292"
+     inkscape:transform-center-y="6.2004823">
+    <rect
+       class="panel"
+       x="52"
+       y="300"
+       width="1696"
+       height="392"
+       id="rect29" />
+    <rect
+       class="panel-head"
+       x="52"
+       y="300"
+       width="1696"
+       height="44"
+       id="rect30" />
+    <text
+       class="panel-title"
+       x="72"
+       y="330"
+       id="text30"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:25px;line-height:normal;font-family:Arial, Helvetica, sans-serif">b) Sample-level thermobarometer selection</text>
+    <rect
+       class="stage"
+       x="71.957306"
+       y="361.95731"
+       width="220.37152"
+       height="312.08539"
+       id="rect31" />
+    <rect
+       class="stage-head"
+       x="71.956902"
+       y="361.95691"
+       width="219.71202"
+       height="42.086197"
+       id="rect32" />
+    <text
+       class="stage-title"
+       x="92"
+       y="389"
+       id="text32"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:18px;line-height:normal;font-family:Arial, Helvetica, sans-serif">1. Sample inputs</text>
+    <g
+       id="g87"
+       transform="translate(11.523384,5.8030304)">
+      <rect
+         class="data"
+         x="87.23436"
+         y="419.93698"
+         width="166.77065"
+         height="55.193119"
+         rx="3.1765835"
+         id="rect34" />
+      <g
+         id="g86"
+         transform="translate(8.0028614e-6,2.1805439)">
+        <text
+           class="box-title"
+           x="111.51707"
+           y="439.36447"
+           id="text35"
+           style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif">Clinopyroxene</text>
+        <text
+           class="box-title"
+           x="120.3128"
+           y="460.36447"
+           id="text36"
+           style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif">composition</text>
+      </g>
+    </g>
+    <g
+       id="g89"
+       transform="translate(-12.127754,-33.275483)">
+      <rect
+         class="data"
+         x="110.8855"
+         y="532.15674"
+         width="166.77063"
+         height="65.715683"
+         rx="3.1765835"
+         id="rect34-3"
+         style="fill:#d5ebf3;stroke:#3986a8;stroke-width:1.8" />
+      <text
+         class="box-title"
+         x="122.41926"
+         y="553.76477"
+         id="text35-9"
+         style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif;fill:#1f2326">Equilibrium liquid</text>
+      <text
+         class="box-title"
+         x="140.2291"
+         y="579.14917"
+         id="text36-0"
+         style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:0.9;font-family:Arial, Helvetica, sans-serif;white-space:pre;inline-size:115.417;display:inline;fill:#1f2326"
+         transform="translate(-7.0150449,-7.4534853)"
+         xml:space="preserve"><tspan
+           x="140.2291"
+           y="579.14917"
+           id="tspan12"><tspan
+             style="text-align:center;text-anchor:middle"
+             id="tspan11">compositions </tspan></tspan><tspan
+           x="140.2291"
+           y="594.44915"
+           id="tspan16"><tspan
+             style="font-size:14.6667px;text-align:center;text-anchor:middle"
+             id="tspan13">(incl. H</tspan><tspan
+             style="font-size:65%;text-align:center;baseline-shift:sub;text-anchor:middle"
+             id="tspan14">2</tspan><tspan
+             style="font-size:14.6667px;text-align:center;text-anchor:middle"
+             id="tspan15">O)</tspan></tspan></text>
+      <text
+         xml:space="preserve"
+         style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif;-inkscape-font-specification:'Sans, Normal';font-variant-ligatures:normal;font-variant-position:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-alternates:normal;font-variant-east-asian:normal;font-feature-settings:normal;font-variation-settings:normal;text-indent:0;text-align:center;text-decoration-line:none;text-decoration-style:solid;text-decoration-color:#000000;letter-spacing:normal;word-spacing:normal;text-transform:none;writing-mode:lr-tb;direction:ltr;text-orientation:mixed;dominant-baseline:auto;baseline-shift:baseline;white-space:pre;opacity:1;vector-effect:none;fill:#1a1d20;fill-opacity:1;stroke:none;stroke-width:1;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;-inkscape-stroke:none"
+         x="468.98254"
+         y="526.0824"
+         id="text34"><tspan
+           sodipodi:role="line"
+           id="tspan33"
+           x="468.98254"
+           y="526.0824">s</tspan></text>
+    </g>
+    <g
+       id="g90"
+       transform="translate(1.7652601,28.93127)">
+      <g
+         id="g89-2"
+         transform="matrix(1.0608614,0,0,1.4006543,-25.7166,-197.00736)">
+        <rect
+           class="data"
+           x="110.8855"
+           y="535.66425"
+           width="166.77065"
+           height="55.193119"
+           rx="3.1765835"
+           id="rect34-3-9"
+           style="fill:#d5ebf3;stroke:#3986a8;stroke-width:1.8" />
+      </g>
+      <text
+         class="box-title"
+         x="314.53741"
+         y="591.12146"
+         id="text38"
+         style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif;white-space:pre;inline-size:170.103;display:inline"
+         transform="matrix(0.83201809,0,0,0.83201809,-152.61372,85.564826)"
+         xml:space="preserve"><tspan
+           x="314.53741"
+           y="591.12146"
+           id="tspan18"><tspan
+             style="font-size:17.6278px;text-align:center;text-anchor:middle"
+             id="tspan17">(Optional) Suitable </tspan></tspan><tspan
+           x="314.53741"
+           y="613.15621"
+           id="tspan20"><tspan
+             style="font-size:17.6278px;text-align:center;text-anchor:middle"
+             id="tspan19">liquid compositions </tspan></tspan><tspan
+           x="314.53741"
+           y="635.19094"
+           id="tspan22"><tspan
+             style="font-size:17.6278px;text-align:center;text-anchor:middle"
+             id="tspan21">specified by users</tspan></tspan></text>
+    </g>
+    <text
+       class="box-text"
+       x="110"
+       y="624"
+       id="text39"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:15px;line-height:normal;font-family:Arial, Helvetica, sans-serif" />
+    <rect
+       class="stage"
+       x="321.66693"
+       y="362.04111"
+       width="280.29199"
+       height="311.91782"
+       id="rect39" />
+    <rect
+       class="stage-head"
+       x="321.66693"
+       y="362.04111"
+       width="280.29199"
+       height="41.988934"
+       id="rect40" />
+    <text
+       class="stage-title"
+       x="341.65094"
+       y="389"
+       id="text40"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:18px;line-height:normal;font-family:Arial, Helvetica, sans-serif">2. Run candidate models</text>
+    <g
+       id="g85-9"
+       transform="translate(34.622816,-24.109111)">
+      <rect
+         class="model"
+         x="301.44269"
+         y="526.72693"
+         width="119.93095"
+         height="54.735008"
+         rx="2.3986192"
+         id="rect42-7"
+         style="fill:#e8e0f2;stroke:#7761a2;stroke-width:1.73523" />
+      <g
+         id="g81-5"
+         transform="translate(-86.677776,35.324902)">
+        <text
+           class="box-title"
+           x="409.99121"
+           y="514"
+           id="text43-2"
+           style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif;fill:#1f2326"><tspan
+             style="font-size:16px"
+             id="tspan90">Cpx-liquid</tspan></text>
+        <text
+           class="box-title"
+           x="395"
+           y="535"
+           id="text44-9"
+           style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif;fill:#1f2326"><tspan
+             style="font-size:16px"
+             id="tspan91">thermometers</tspan></text>
+      </g>
+    </g>
+    <g
+       id="g85-9-0"
+       transform="translate(165.62916,-24.109111)">
+      <rect
+         class="model"
+         x="301.44269"
+         y="526.72693"
+         width="119.93095"
+         height="54.735008"
+         rx="2.3986192"
+         id="rect42-7-6"
+         style="fill:#e8e0f2;stroke:#7761a2;stroke-width:1.73523" />
+      <g
+         id="g81-5-2"
+         transform="translate(-83.480816,35.324902)">
+        <text
+           class="box-title"
+           x="405.91241"
+           y="514"
+           id="text43-2-4"
+           style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif;fill:#1f2326"><tspan
+             style="font-size:16px"
+             id="tspan90-8">Cpx-liquid</tspan></text>
+        <text
+           class="box-title"
+           x="401.17413"
+           y="535"
+           id="text44-9-9"
+           style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif;fill:#1f2326"><tspan
+             style="font-size:16px"
+             id="tspan91-3">barometers</tspan></text>
+      </g>
+    </g>
+    <g
+       id="g85-9-6"
+       transform="translate(34.682407,-100.75786)">
+      <rect
+         class="model"
+         x="301.44269"
+         y="526.72693"
+         width="119.93095"
+         height="54.735008"
+         rx="2.3986192"
+         id="rect42-7-0"
+         style="fill:#e8e0f2;stroke:#7761a2;stroke-width:1.73523" />
+      <g
+         id="g81-5-7"
+         transform="translate(-86.677776,35.324902)">
+        <text
+           class="box-title"
+           x="413.61328"
+           y="514"
+           id="text43-2-8"
+           style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif;fill:#1f2326"><tspan
+             style="font-size:16px"
+             id="tspan90-3">Cpx-only</tspan></text>
+        <text
+           class="box-title"
+           x="395"
+           y="535"
+           id="text44-9-6"
+           style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif;fill:#1f2326"><tspan
+             style="font-size:16px"
+             id="tspan91-1">thermometers</tspan></text>
+      </g>
+    </g>
+    <g
+       id="g85-9-0-5"
+       transform="translate(165.68875,-100.75786)">
+      <rect
+         class="model"
+         x="301.44269"
+         y="526.72693"
+         width="119.93095"
+         height="54.735008"
+         rx="2.3986192"
+         id="rect42-7-6-8"
+         style="fill:#e8e0f2;stroke:#7761a2;stroke-width:1.73523" />
+      <g
+         id="g81-5-2-9"
+         transform="translate(-83.480816,35.324902)">
+        <text
+           class="box-title"
+           x="410.41632"
+           y="514"
+           id="text43-2-4-9"
+           style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif;fill:#1f2326"><tspan
+             sodipodi:role="line"
+             id="tspan93"
+             x="410.41632"
+             y="514"
+             style="font-size:16px">Cpx-only</tspan></text>
+        <text
+           class="box-title"
+           x="401.17413"
+           y="535"
+           id="text44-9-9-5"
+           style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif;fill:#1f2326"><tspan
+             style="font-size:16px"
+             id="tspan91-3-9">barometers</tspan></text>
+      </g>
+    </g>
+    <text
+       class="box-text"
+       x="395"
+       y="553"
+       id="text45"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:15px;line-height:normal;font-family:Arial, Helvetica, sans-serif" />
+    <rect
+       class="software"
+       x="347.6767"
+       y="590.06036"
+       width="228.27246"
+       height="51.879211"
+       rx="4.5654492"
+       id="rect45" />
+    <text
+       class="box-title"
+       x="440.34586"
+       y="613.86761"
+       id="text46"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif;white-space:pre;inline-size:171.918;display:inline"
+       transform="translate(-64.894348,-2.4040322)"
+       xml:space="preserve"><tspan
+         x="440.34586"
+         y="613.86761"
+         id="tspan24"><tspan
+           style="text-align:center;text-anchor:middle"
+           id="tspan23">Calculate candidate </tspan></tspan><tspan
+         x="440.34586"
+         y="635.11763"
+         id="tspan27"><tspan
+           style="text-align:center;text-anchor:middle"
+           id="tspan25">for </tspan><tspan
+           style="text-align:center;text-anchor:middle"
+           id="tspan26">P or T estimates</tspan></tspan></text>
+    <rect
+       class="stage"
+       x="632"
+       y="362"
+       width="760"
+       height="312"
+       id="rect47" />
+    <rect
+       class="stage-head"
+       x="632"
+       y="362"
+       width="760"
+       height="42"
+       id="rect48" />
+    <text
+       class="stage-title"
+       x="652"
+       y="389"
+       id="text48"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:18px;line-height:normal;font-family:Arial, Helvetica, sans-serif">3. Two-step model selection protocol</text>
+    <rect
+       class="process"
+       x="657"
+       y="420"
+       width="420"
+       height="228"
+       rx="4"
+       id="rect49" />
+    <text
+       class="box-title"
+       x="677"
+       y="448"
+       id="text49"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif">Step 1.</text>
+    <text
+       class="box-title"
+       x="739.55072"
+       y="447.37646"
+       id="text49-6"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif;white-space:pre;inline-size:312.283;display:inline;fill:#1f2326"
+       xml:space="preserve"><tspan
+         x="739.55072"
+         y="447.37646"
+         id="tspan28">Filter unsuitable models using three </tspan><tspan
+         x="739.55072"
+         y="468.62645"
+         id="tspan29">OOD criteria</tspan></text>
+    <text
+       class="small"
+       x="677"
+       y="469"
+       id="text50"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:13px;line-height:normal;font-family:Arial, Helvetica, sans-serif" />
+    <rect
+       class="rule"
+       x="676.92133"
+       y="481.08429"
+       width="116.15731"
+       height="69.216232"
+       rx="4.0054245"
+       id="rect50" />
+    <rect
+       class="rule"
+       x="950.31787"
+       y="480.50378"
+       width="116.22951"
+       height="71.462288"
+       rx="4.013258"
+       id="rect50-95"
+       style="fill:#fff1c2;stroke:#c58a1a;stroke-width:1.4155" />
+    <text
+       class="box-label"
+       x="777.15729"
+       y="520.60651"
+       id="text51-2"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:14px;line-height:normal;font-family:Arial, Helvetica, sans-serif;text-align:center;text-anchor:middle;white-space:pre;inline-size:119.492;display:inline;fill:#30363a"
+       transform="translate(231.2754,-16.949717)"
+       xml:space="preserve"><tspan
+         x="777.15729"
+         y="520.60651"
+         id="tspan30">All components<tspan
+   y="520.60651"
+   id="tspan32"> </tspan></tspan><tspan
+         x="777.15729"
+         y="538.10653"
+         id="tspan34">weighted by<tspan
+   y="538.10653"
+   id="tspan35"> </tspan></tspan><tspan
+         x="777.15729"
+         y="555.60653"
+         id="tspan36">SHAP</tspan></text>
+    <text
+       class="tiny"
+       x="692"
+       y="546"
+       id="text53"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:12px;line-height:normal;font-family:Arial, Helvetica, sans-serif" />
+    <rect
+       class="rule"
+       x="813.73572"
+       y="480.38824"
+       width="116.14865"
+       height="70.608307"
+       rx="4.0051255"
+       id="rect50-9"
+       style="fill:#fff1c2;stroke:#c58a1a;stroke-width:1.65135" />
+    <path
+       class="arrow"
+       d="m 458.12779,589.09688 -0.53265,-10.34799 H 873.64299 V 551.7628"
+       id="path79-0"
+       sodipodi:nodetypes="cccc"
+       style="fill:none;stroke:#2f3336;stroke-width:1.9;stroke-dasharray:5.7, 5.7;stroke-dashoffset:0.76;marker-end:url(#ArrowWide)" />
+    <text
+       class="box-label"
+       x="782.04498"
+       y="520.60651"
+       id="text51"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:14px;line-height:normal;font-family:Arial, Helvetica, sans-serif;text-align:center;text-anchor:middle;white-space:pre;inline-size:102.751;display:inline"
+       transform="translate(-48.260112,-17.998132)"
+       xml:space="preserve"><tspan
+         x="782.04498"
+         y="520.60651"
+         id="tspan37">Representative<tspan
+   y="520.60651"
+   id="tspan38"> </tspan></tspan><tspan
+         x="782.04498"
+         y="538.10653"
+         id="tspan39">components of<tspan
+   y="538.10653"
+   id="tspan40"> </tspan></tspan><tspan
+         x="782.04498"
+         y="555.60653"
+         id="tspan41">the melt</tspan></text>
+    <text
+       class="tiny"
+       x="824"
+       y="546"
+       id="text56"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:12px;line-height:normal;font-family:Arial, Helvetica, sans-serif" />
+    <text
+       class="tiny"
+       x="824"
+       y="559"
+       id="text57"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:12px;line-height:normal;font-family:Arial, Helvetica, sans-serif" />
+    <rect
+       class="model"
+       x="328.34518"
+       y="498.10095"
+       width="265.18167"
+       height="64.416862"
+       rx="5.286097"
+       id="rect42-7-6-6"
+       style="fill:none;stroke:#7761a2;stroke-width:2.44144;stroke-dasharray:2.44144, 2.44144;stroke-dashoffset:0" />
+    <text
+       class="tiny"
+       x="956"
+       y="546"
+       id="text60"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:12px;line-height:normal;font-family:Arial, Helvetica, sans-serif" />
+    <text
+       class="tiny"
+       x="956"
+       y="559"
+       id="text61"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:12px;line-height:normal;font-family:Arial, Helvetica, sans-serif" />
+    <rect
+       class="software"
+       x="677"
+       y="589.53827"
+       width="380"
+       height="40"
+       rx="4"
+       id="rect61" />
+    <text
+       class="box-title"
+       x="704.64087"
+       y="614.04974"
+       id="text62"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif">Retain models that pass all OOD criteria</text>
+    <text
+       class="box-label"
+       x="731"
+       y="642.46173"
+       id="text63"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:14px;line-height:normal;font-family:Arial, Helvetica, sans-serif">No model passes → no recommendation</text>
+    <rect
+       class="process"
+       x="1102"
+       y="420"
+       width="265"
+       height="228"
+       rx="4"
+       id="rect63" />
+    <text
+       class="box-title"
+       x="1122"
+       y="447.88235"
+       id="text64"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif">Step 2.</text>
+    <rect
+       class="neutral"
+       x="1116.9442"
+       y="484.24487"
+       width="235.11168"
+       height="58.810951"
+       rx="4.0019007"
+       id="rect64" />
+    <text
+       class="box-label"
+       x="781.94244"
+       y="520.60651"
+       id="text51-1"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:14px;line-height:normal;font-family:Arial, Helvetica, sans-serif;text-align:center;text-anchor:middle;white-space:pre;inline-size:102.751;display:inline;fill:#30363a"
+       transform="translate(88.120263,-8.9209705)"
+       xml:space="preserve"><tspan
+         x="781.94244"
+         y="520.60651"
+         id="tspan42">P–T rangesP–T<tspan
+   y="520.60651"
+   id="tspan43"> </tspan></tspan><tspan
+         x="781.94244"
+         y="538.10653"
+         id="tspan44">ranges</tspan></text>
+    <text
+       class="box-title"
+       x="1225.8831"
+       y="512.50122"
+       id="text65"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif;white-space:pre;inline-size:212.119;display:inline"
+       transform="translate(-97.219673,-3.843039)"
+       xml:space="preserve"><tspan
+         x="1225.8831"
+         y="512.50122"
+         id="tspan46"><tspan
+           style="text-align:center;text-anchor:middle"
+           id="tspan45">Estimate the absolute </tspan></tspan><tspan
+         x="1225.8831"
+         y="533.75118"
+         id="tspan48"><tspan
+           style="text-align:center;text-anchor:middle"
+           id="tspan47">deviation for each model</tspan></tspan></text>
+    <text
+       class="small"
+       x="1135"
+       y="535"
+       id="text67"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:13px;line-height:normal;font-family:Arial, Helvetica, sans-serif" />
+    <rect
+       class="software"
+       x="1117"
+       y="564"
+       width="235"
+       height="66"
+       rx="4"
+       id="rect67" />
+    <text
+       class="box-title"
+       x="1135"
+       y="586"
+       id="text68"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif;white-space:pre;inline-size:187.592;display:inline"
+       transform="translate(11.138184,6.463613)"
+       xml:space="preserve"><tspan
+         x="1135"
+         y="586"
+         id="tspan49">Select the model with </tspan><tspan
+         x="1135"
+         y="607.25002"
+         id="tspan50">the smallest deviation</tspan></text>
+    <text
+       class="small"
+       x="1135"
+       y="623"
+       id="text70"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:13px;line-height:normal;font-family:Arial, Helvetica, sans-serif" />
+    <rect
+       class="stage"
+       x="1422"
+       y="362"
+       width="302"
+       height="312"
+       id="rect70" />
+    <rect
+       class="stage-head"
+       x="1422"
+       y="362"
+       width="302"
+       height="42"
+       id="rect71" />
+    <text
+       class="stage-title"
+       x="1442"
+       y="389"
+       id="text71"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:18px;line-height:normal;font-family:Arial, Helvetica, sans-serif">4. Sample-level outputs</text>
+    <rect
+       class="output"
+       x="1446.9774"
+       y="425.27686"
+       width="252.045"
+       height="65"
+       rx="4.000711"
+       id="rect72" />
+    <text
+       class="box-title"
+       x="1530.7418"
+       y="457.75409"
+       id="text72"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif;white-space:pre;inline-size:164.794;display:inline"
+       transform="translate(-40.873375,-6.090754)"
+       xml:space="preserve"><tspan
+         x="1530.7418"
+         y="457.75409"
+         id="tspan52"><tspan
+           style="text-align:center;text-anchor:middle"
+           id="tspan51">Favored model for </tspan></tspan><tspan
+         x="1530.7418"
+         y="479.00408"
+         id="tspan54"><tspan
+           style="text-align:center;text-anchor:middle"
+           id="tspan53">each sample</tspan></tspan></text>
+    <text
+       class="small"
+       x="1465"
+       y="490"
+       id="text74"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:13px;line-height:normal;font-family:Arial, Helvetica, sans-serif" />
+    <rect
+       class="output"
+       x="1447.0562"
+       y="507.45056"
+       width="251.8876"
+       height="65"
+       rx="3.9982157"
+       id="rect74" />
+    <text
+       class="box-title"
+       x="1582.8801"
+       y="531.23041"
+       id="text75"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif;white-space:pre;inline-size:184.816;display:inline"
+       transform="translate(-102.69861,4.094832)"
+       xml:space="preserve"><tspan
+         x="1582.8801"
+         y="531.23041"
+         id="tspan56"><tspan
+           style="font-size:17.3333px;text-align:center;text-anchor:middle"
+           id="tspan55">Corresponding P or T </tspan></tspan><tspan
+         x="1582.8801"
+         y="552.89704"
+         id="tspan58"><tspan
+           style="font-size:17.3333px;text-align:center;text-anchor:middle"
+           id="tspan57">estimate</tspan></tspan></text>
+    <text
+       class="box-text"
+       x="1465"
+       y="566"
+       id="text76"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:15px;line-height:normal;font-family:Arial, Helvetica, sans-serif" />
+    <rect
+       class="output"
+       x="1447.1096"
+       y="589.62427"
+       width="251.78067"
+       height="65"
+       rx="3.9965186"
+       id="rect76" />
+    <text
+       class="box-label"
+       x="1569.3679"
+       y="622"
+       id="text77"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:14px;line-height:normal;font-family:Arial, Helvetica, sans-serif;white-space:pre;inline-size:232.13;display:inline"
+       transform="translate(-113.04627,-6.1091241)"
+       xml:space="preserve"><tspan
+         x="1569.3679"
+         y="622"
+         id="tspan60"><tspan
+           style="font-size:17.3333px;text-align:center;baseline-shift:baseline;text-anchor:middle;opacity:1;vector-effect:none;fill:#1f2326;stop-color:#000000;stop-opacity:1"
+           id="tspan59">Model-specific OOD flags </tspan></tspan><tspan
+         x="1569.3679"
+         y="643.66664"
+         id="tspan62"><tspan
+           style="font-size:17.3333px;text-align:center;baseline-shift:baseline;text-anchor:middle;opacity:1;vector-effect:none;fill:#1f2326;stop-color:#000000;stop-opacity:1"
+           id="tspan61">and predicted deviations</tspan></tspan></text>
+    <text
+       class="small"
+       x="1465"
+       y="638"
+       id="text78"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:13px;line-height:normal;font-family:Arial, Helvetica, sans-serif" />
+    <path
+       class="arrow"
+       d="m 292.94644,614 h 55"
+       id="path78" />
+    <path
+       class="arrow"
+       d="m 266.31279,531.35939 h 53.13236"
+       id="path78-4"
+       style="font-variation-settings:normal;opacity:1;fill:none;fill-opacity:1;stroke:#7761a2;stroke-width:2.141;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;marker-end:url(#RoundedArrow);stop-color:#000000;stop-opacity:1"
+       sodipodi:nodetypes="cc" />
+    <path
+       class="arrow"
+       d="M 293.1197,656.62103 H 617 v -68.81531 c -11.05095,-8.96322 -4.97247,-13.64408 0,-18.60145 V 530 h 40"
+       id="path79"
+       sodipodi:nodetypes="cccccc" />
+    <path
+       class="arrow"
+       d="m 1057,610 h 32 v -97.27971 h 28"
+       id="path80"
+       sodipodi:nodetypes="cccc" />
+    <path
+       class="arrow-thin"
+       d="m 1234,543 v 21"
+       id="path81" />
+    <path
+       class="arrow"
+       d="m 1352,597 h 33 V 462 h 36.268"
+       id="path82"
+       sodipodi:nodetypes="cccc" />
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:13.3333px;line-height:normal;font-family:Arial, Helvetica, sans-serif;-inkscape-font-specification:'Arial, Helvetica, sans-serif Bold';font-variant-ligatures:normal;font-variant-position:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-alternates:normal;font-variant-east-asian:normal;font-feature-settings:normal;font-variation-settings:normal;text-indent:0;text-align:center;text-decoration-line:none;text-decoration-style:solid;text-decoration-color:#000000;letter-spacing:normal;word-spacing:normal;text-transform:none;writing-mode:lr-tb;direction:ltr;text-orientation:mixed;dominant-baseline:auto;baseline-shift:baseline;text-anchor:middle;white-space:pre;inline-size:62.2496;display:inline;opacity:1;fill:#3f3256;fill-opacity:1;stroke:none;stroke-width:0.5;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;marker-end:url(#arrow)"
+       x="292.28467"
+       y="524.80505"
+       id="text120"
+       transform="translate(5.6736191,-12.651343)"><tspan
+         x="292.28467"
+         y="524.80505"
+         id="tspan63">required<tspan
+   y="524.80505"
+   id="tspan64"> </tspan></tspan><tspan
+         x="292.28467"
+         y="541.4717"
+         id="tspan65">for</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:14.6667px;line-height:normal;font-family:Arial, Helvetica, sans-serif;-inkscape-font-specification:'Arial, Helvetica, sans-serif Bold';font-variant-ligatures:normal;font-variant-position:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-alternates:normal;font-variant-east-asian:normal;font-feature-settings:normal;font-variation-settings:normal;text-indent:0;text-align:center;text-decoration-line:none;text-decoration-style:solid;text-decoration-color:#000000;letter-spacing:normal;word-spacing:normal;text-transform:none;writing-mode:lr-tb;direction:ltr;text-orientation:mixed;dominant-baseline:auto;baseline-shift:baseline;text-anchor:middle;white-space:normal;opacity:1;fill:#7761a2;fill-opacity:1;stroke:none;stroke-width:2.141;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;marker-end:url(#arrow)"
+       x="868.9165"
+       y="530.87482"
+       id="text122"><tspan
+         sodipodi:role="line"
+         id="tspan122"
+         x="868.9165"
+         y="530.87482" /></text>
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14.6667px;line-height:normal;font-family:Arial, Helvetica, sans-serif;-inkscape-font-specification:'Arial, Helvetica, sans-serif';font-variant-ligatures:normal;font-variant-position:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-alternates:normal;font-variant-east-asian:normal;font-feature-settings:normal;text-indent:0;text-align:center;text-decoration-line:none;text-decoration-style:solid;text-decoration-color:#000000;letter-spacing:normal;word-spacing:normal;text-transform:none;writing-mode:lr-tb;direction:ltr;text-orientation:mixed;dominant-baseline:auto;baseline-shift:baseline;text-anchor:middle;white-space:normal;opacity:1;fill:#2f3336;fill-opacity:1;stroke:none;stroke-width:0.5;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:6.6, 6.6;stroke-dashoffset:0.88;stroke-opacity:1;marker-end:url(#arrow)"
+       x="1189.2524"
+       y="444.57458"
+       id="text127"><tspan
+         sodipodi:role="line"
+         id="tspan127"
+         x="1189.2524"
+         y="444.57458" /></text>
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif;-inkscape-font-specification:'Arial, Helvetica, sans-serif';font-variant-ligatures:normal;font-variant-position:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-alternates:normal;font-variant-east-asian:normal;font-feature-settings:normal;font-variation-settings:normal;text-indent:0;text-align:start;text-decoration-line:none;text-decoration-style:solid;text-decoration-color:#000000;letter-spacing:normal;word-spacing:normal;text-transform:none;writing-mode:lr-tb;direction:ltr;text-orientation:mixed;dominant-baseline:auto;baseline-shift:baseline;text-anchor:middle;white-space:pre;inline-size:176.526;display:inline;opacity:1;vector-effect:none;fill:#1f2326;fill-opacity:1;stroke:none;stroke-width:1;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;-inkscape-stroke:none;marker-end:url(#arrow);stop-color:#000000;stop-opacity:1"
+       x="1218.3948"
+       y="461.93594"
+       id="text128"
+       transform="translate(55.80434,-14.261109)"><tspan
+         x="1218.3948"
+         y="461.93594"
+         id="tspan66">Rank the remaining<tspan
+   y="461.93594"
+   id="tspan67"> </tspan></tspan><tspan
+         x="1218.3948"
+         y="483.18593"
+         id="tspan68">models by deviations</tspan></text>
+  </g>
+  <g
+     id="panel-a">
+    <rect
+       class="panel"
+       x="52"
+       y="52"
+       width="1696"
+       height="228"
+       id="rect4"
+       sodipodi:insensitive="true" />
+    <rect
+       class="panel-head"
+       x="52"
+       y="52"
+       width="1696"
+       height="44"
+       id="rect5" />
+    <text
+       class="panel-title"
+       x="72"
+       y="82"
+       id="text5"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:25px;line-height:normal;font-family:Arial, Helvetica, sans-serif">a) AIMS4PT_cpx architecture and user access</text>
+    <text
+       class="small"
+       x="100"
+       y="148"
+       id="text7"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:13px;line-height:normal;font-family:Arial, Helvetica, sans-serif" />
+    <text
+       class="small"
+       x="100"
+       y="200"
+       id="text9"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:13px;line-height:normal;font-family:Arial, Helvetica, sans-serif" />
+    <text
+       class="small"
+       x="100"
+       y="252"
+       id="text11"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:13px;line-height:normal;font-family:Arial, Helvetica, sans-serif" />
+    <text
+       class="small"
+       x="483"
+       y="165"
+       id="text13"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:13px;line-height:normal;font-family:Arial, Helvetica, sans-serif" />
+    <text
+       class="box-text"
+       x="990"
+       y="195"
+       id="text20"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:15px;line-height:normal;font-family:Arial, Helvetica, sans-serif" />
+    <text
+       class="box-text"
+       x="990"
+       y="217"
+       id="text21"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:15px;line-height:normal;font-family:Arial, Helvetica, sans-serif" />
+    <text
+       class="small"
+       x="990"
+       y="236"
+       id="text22"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:13px;line-height:normal;font-family:Arial, Helvetica, sans-serif" />
+    <text
+       class="box-text"
+       x="1365"
+       y="195"
+       id="text24"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:15px;line-height:normal;font-family:Arial, Helvetica, sans-serif" />
+    <text
+       class="box-text"
+       x="1365"
+       y="217"
+       id="text25"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:15px;line-height:normal;font-family:Arial, Helvetica, sans-serif" />
+    <text
+       class="small"
+       x="1365"
+       y="236"
+       id="text26"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:13px;line-height:normal;font-family:Arial, Helvetica, sans-serif" />
+    <g
+       id="g37"
+       transform="translate(-88.671333,2)">
+      <rect
+         class="model"
+         x="162.17587"
+         y="113.86763"
+         width="300"
+         height="42"
+         rx="4"
+         id="rect6" />
+      <text
+         class="box-title"
+         x="193.88559"
+         y="140.85249"
+         id="text6"
+         style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif">Published thermobarometers</text>
+      <rect
+         class="data"
+         x="162.17587"
+         y="165.64124"
+         width="300"
+         height="42"
+         rx="4"
+         id="rect7" />
+      <text
+         class="box-title"
+         x="205.23692"
+         y="192.85249"
+         id="text8"
+         style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif">Model calibration datasets</text>
+      <rect
+         class="data"
+         x="161.18541"
+         y="217.09682"
+         width="300"
+         height="42"
+         rx="4"
+         id="rect9" />
+      <g
+         id="g3"
+         inkscape:label="AIMS4PT_cpx framework components"
+         transform="translate(82.64278,0.64123283)">
+        <rect
+           class="process"
+           x="460.11404"
+           y="118.11404"
+           width="524.86487"
+           height="135.77193"
+           rx="5.1206322"
+           id="rect11" />
+        <text
+           class="box-title"
+           x="483"
+           y="144"
+           id="text12"
+           style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif">AIMS4PT_cpx framework components</text>
+        <rect
+           class="neutral"
+           x="729.63879"
+           y="160.27829"
+           width="226.2093"
+           height="35"
+           rx="5.4508271"
+           id="rect13-5"
+           style="fill:#f1f4f5;stroke:#8a969f;stroke-width:1.77391" />
+        <rect
+           class="neutral"
+           x="729.63879"
+           y="207.67163"
+           width="226.2093"
+           height="35"
+           rx="5.4508271"
+           id="rect13-5-1"
+           style="fill:#f1f4f5;stroke:#8a969f;stroke-width:1.77391" />
+        <rect
+           class="neutral"
+           x="476.03546"
+           y="160.36285"
+           width="226.03999"
+           height="35"
+           rx="5.4467516"
+           id="rect13-5-0"
+           style="fill:#f1f4f5;stroke:#8a969f;stroke-width:1.94314;stroke-dasharray:none" />
+        <rect
+           class="neutral"
+           x="475.9509"
+           y="207.67163"
+           width="226.2093"
+           height="35"
+           rx="5.4508271"
+           id="rect13-5-5"
+           style="fill:#f1f4f5;stroke:#8a969f;stroke-width:1.77391" />
+        <text
+           class="box-label"
+           x="504.79825"
+           y="181.57819"
+           id="text14"
+           style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:14px;line-height:normal;font-family:Arial, Helvetica, sans-serif">SHAP feature importance</text>
+        <text
+           class="box-label"
+           x="737.40509"
+           y="181.40134"
+           id="text15"
+           style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:14px;line-height:normal;font-family:Arial, Helvetica, sans-serif">Out-of-distribution (OOD) filters</text>
+        <text
+           class="box-label"
+           x="521.20544"
+           y="228.80151"
+           id="text16"
+           style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:14px;line-height:normal;font-family:Arial, Helvetica, sans-serif">Deviation predictors</text>
+        <text
+           class="box-label"
+           x="756.88751"
+           y="228.79468"
+           id="text17"
+           style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:14px;line-height:normal;font-family:Arial, Helvetica, sans-serif">AIMS4PT_cpx uncertainty</text>
+        <text
+           xml:space="preserve"
+           style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:16px;line-height:normal;font-family:Arial, Helvetica, sans-serif;-inkscape-font-specification:'Arial, Helvetica, sans-serif Bold';font-variant-ligatures:normal;font-variant-position:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-alternates:normal;font-variant-east-asian:normal;font-feature-settings:normal;text-indent:0;text-align:center;text-decoration-line:none;text-decoration-style:solid;text-decoration-color:#000000;letter-spacing:normal;word-spacing:normal;text-transform:none;writing-mode:lr-tb;direction:ltr;text-orientation:mixed;dominant-baseline:auto;baseline-shift:baseline;text-anchor:middle;white-space:normal;opacity:1;vector-effect:none;fill:#505050;fill-opacity:1;stroke:none;stroke-width:1;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;-inkscape-stroke:none;marker-end:url(#arrow)"
+           x="751.68127"
+           y="227.5446"
+           id="text119"><tspan
+             sodipodi:role="line"
+             id="tspan114"
+             x="751.68127"
+             y="227.5446" /></text>
+      </g>
+      <text
+         class="box-title"
+         x="173.25548"
+         y="242.50453"
+         id="text10"
+         style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif">Independent experimental dataset</text>
+      <g
+         id="g1"
+         transform="translate(91.593168,13.366382)">
+        <g
+           id="g2"
+           transform="translate(-6.5367173,-2.8014503)"
+           inkscape:label="User access">
+          <rect
+             class="stage"
+             x="1064.1385"
+             y="99.981354"
+             width="488.80325"
+             height="152.1899"
+             rx="2.5726488"
+             id="rect17" />
+          <text
+             class="box-label"
+             x="1078.5641"
+             y="124.62333"
+             id="text18"
+             style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:14px;line-height:normal;font-family:Arial, Helvetica, sans-serif"><tspan
+               style="font-size:16px"
+               id="tspan1">User access</tspan></text>
+          <rect
+             class="software"
+             x="1079.4395"
+             y="135.90462"
+             width="225.1673"
+             height="100.34338"
+             rx="2.6106353"
+             id="rect18" />
+          <text
+             class="box-title"
+             x="1099.6111"
+             y="190.07631"
+             id="text19"
+             style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif;white-space:pre;inline-size:195.02;display:inline"
+             transform="translate(16.109948,-8.5363793)"
+             xml:space="preserve"><tspan
+               x="1099.6111"
+               y="190.07631"
+               id="tspan69">Python package / </tspan><tspan
+               x="1099.6111"
+               y="211.32631"
+               id="tspan70">notebook interface</tspan></text>
+          <rect
+             class="software"
+             x="1328.9463"
+             y="135.86998"
+             width="204.1067"
+             height="100.41265"
+             rx="2.3664546"
+             id="rect22" />
+          <text
+             class="box-title"
+             x="1351.7938"
+             y="190.07631"
+             id="text23"
+             style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif">Graphical interface</text>
+        </g>
+        <text
+           xml:space="preserve"
+           style="font-size:16px;font-family:Sans;-inkscape-font-specification:'Sans, Normal';fill:#ffffff;stroke:#050505;stroke-width:1.88976"
+           x="1187.6731"
+           y="77.312698"
+           id="text2"><tspan
+             sodipodi:role="line"
+             id="tspan2"
+             x="1187.6731"
+             y="77.312698" /></text>
+      </g>
+      <path
+         class="arrow-thin"
+         d="m 462.17588,134.86763 h 40 v 12 h 40"
+         id="path26" />
+      <path
+         class="arrow-thin"
+         d="m 462.17588,186.86763 h 80"
+         id="path27" />
+      <path
+         class="arrow-thin"
+         d="m 462.17588,238.86763 h 40 v -10 h 40"
+         id="path28" />
+      <path
+         class="arrow"
+         d="m 1069.3699,181.33092 h 80"
+         id="path29" />
+    </g>
+    <text
+       class="small"
+       x="878"
+       y="172"
+       id="text29"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:13px;line-height:normal;font-family:Arial, Helvetica, sans-serif" />
+    <path
+       style="font-variation-settings:normal;opacity:1;vector-effect:none;fill:none;fill-opacity:1;fill-rule:evenodd;stroke:#0e0f10;stroke-width:2.2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;-inkscape-stroke:none;marker-end:url(#arrow);stop-color:#000000;stop-opacity:1"
+       d="m 1549.3269,188.64123 h 105.3964 v 108.3125"
+       id="path37"
+       inkscape:connector-type="orthogonal"
+       inkscape:connector-curvature="0"
+       inkscape:connection-start="#g37"
+       sodipodi:nodetypes="ccc" />
+    <text
+       xml:space="preserve"
+       id="text80"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif;-inkscape-font-specification:'Arial, Helvetica, sans-serif, bol Bold';font-variant-ligatures:normal;font-variant-position:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-alternates:normal;font-variant-east-asian:normal;font-feature-settings:normal;font-variation-settings:normal;text-indent:0;text-align:justify;text-decoration-line:none;text-decoration-style:solid;text-decoration-color:#000000;letter-spacing:normal;word-spacing:normal;text-transform:none;writing-mode:lr-tb;direction:ltr;text-orientation:mixed;dominant-baseline:auto;baseline-shift:baseline;white-space:pre;shape-inside:url(#rect80);display:inline;opacity:1;vector-effect:none;fill:#1f2326;fill-opacity:1;stroke:none;stroke-width:1;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;-inkscape-stroke:none;marker-end:url(#arrow)" />
+  </g>
+  <!-- Light dashed arrows denote supporting inputs or prerequisites, not the main sequence. -->
+  <g
+     id="dependency-arrows"
+     fill="none"
+     stroke="#8ea5b1"
+     stroke-width="1.5"
+     stroke-dasharray="6, 5"
+     stroke-linecap="round"
+     stroke-linejoin="round"
+     opacity="0.82"
+     marker-end="url(#arrow-dependency)"
+     style="display:none">
+    <!-- Runtime inputs determine model eligibility. -->
+    <path
+       d="m 302,501 h 35 v -53 h 40"
+       id="dep-cpx-to-cpx-only" />
+    <path
+       d="m 302,522 h 46 v 5 h 29"
+       id="dep-cpx-to-cpx-liquid" />
+    <path
+       d="m 302,590 h 35 v -42 h 40"
+       id="dep-melt-to-cpx-liquid" />
+    <!-- Runtime inputs and predictions feed model-specific OOD checks. -->
+    <path
+       d="m 302,608 h 28 V 410 h 760 V 576 H 867 v -7"
+       id="dep-melt-to-domain-check" />
+    <path
+       d="m 577,605 h 33 V 410 h 35 v 117 h 32"
+       id="dep-prediction-to-pt-range" />
+    <!-- Precomputed framework resources support the two selection steps. -->
+    <path
+       d="m 669,195 h -9 v 91 h -40 v 148 h 37"
+       id="dep-ood-resource-to-screening" />
+    <path
+       d="m 483,233 h -43 v 43 h 965 v 233 h -53"
+       id="dep-deviation-resource-to-ranking" />
+    <!-- Held-out framework RMSE supports sample-set interpretation. -->
+    <path
+       d="m 847,233 h 53 v 53 H 610 v 484 h 290 v 27"
+       id="dep-rmse-to-median-comparison" />
+    <!-- Per-sample outputs are aggregated before sample-set reporting. -->
+    <path
+       d="m 1573,646 v 56 H 65 v 128 h 15"
+       id="dep-sample-output-to-aggregation" />
+  </g>
+  <text
+     xml:space="preserve"
+     style="font-size:16px;font-family:Sans;-inkscape-font-specification:'Sans, Normal';fill:#ffffff;stroke:#050505;stroke-width:1.88976"
+     x="825.0271"
+     y="-65.834084"
+     id="text3"><tspan
+       sodipodi:role="line"
+       id="tspan3"
+       x="825.0271"
+       y="-65.834084" /></text>
+  <text
+     xml:space="preserve"
+     style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:16px;line-height:normal;font-family:Arial, Helvetica, sans-serif;-inkscape-font-specification:'Arial, Helvetica, sans-serif, bol Bold';font-variant-ligatures:normal;font-variant-position:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-alternates:normal;font-variant-east-asian:normal;font-feature-settings:normal;font-variation-settings:normal;text-indent:0;text-align:center;text-decoration-line:none;text-decoration-style:solid;text-decoration-color:#000000;letter-spacing:normal;word-spacing:normal;text-transform:none;writing-mode:lr-tb;direction:ltr;text-orientation:mixed;dominant-baseline:auto;baseline-shift:baseline;text-anchor:middle;white-space:normal;opacity:1;vector-effect:none;fill:#505050;fill-opacity:1;stroke:none;stroke-width:1;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;-inkscape-stroke:none;marker-end:url(#arrow)"
+     x="180.69353"
+     y="578.67169"
+     id="text114"><tspan
+       sodipodi:role="line"
+       id="tspan94"
+       x="180.69353"
+       y="578.67169"
+       style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-family:Arial, Helvetica, sans-serif;-inkscape-font-specification:'Arial, Helvetica, sans-serif Bold';fill:#505050;fill-opacity:1">OR</tspan></text>
+  <text
+     xml:space="preserve"
+     style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:14.6667px;line-height:normal;font-family:Arial, Helvetica, sans-serif;-inkscape-font-specification:'Arial, Helvetica, sans-serif Bold';font-variant-ligatures:normal;font-variant-position:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-alternates:normal;font-variant-east-asian:normal;font-feature-settings:normal;font-variation-settings:normal;text-indent:0;text-align:center;text-decoration-line:none;text-decoration-style:solid;text-decoration-color:#000000;letter-spacing:normal;word-spacing:normal;text-transform:none;writing-mode:lr-tb;direction:ltr;text-orientation:mixed;dominant-baseline:auto;baseline-shift:baseline;text-anchor:middle;white-space:normal;opacity:1;fill:#2f3336;fill-opacity:1;stroke:none;stroke-width:0.5;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:6.6, 6.6;stroke-dashoffset:0.88;stroke-opacity:1;marker-end:url(#arrow)"
+     x="746.05035"
+     y="1273.809"
+     id="text126"><tspan
+       sodipodi:role="line"
+       id="tspan126"
+       x="746.05035"
+       y="1273.809"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:Arial, Helvetica, sans-serif;-inkscape-font-specification:'Arial, Helvetica, sans-serif'">compare with model P-T range</tspan></text>
+  <path
+     d="m 1582.7981,1102.6429 v 35.1469"
+     style="font-variation-settings:normal;vector-effect:none;fill:none;fill-opacity:1;fill-rule:evenodd;stroke:#2f3336;stroke-width:2.2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;-inkscape-stroke:none;marker-end:url(#arrow-3);stop-color:#000000"
+     id="path1-6-6"
+     sodipodi:nodetypes="cc" />
+  <text
+     xml:space="preserve"
+     style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14.6667px;line-height:1.1;font-family:Arial, Helvetica, sans-serif;-inkscape-font-specification:'Arial, Helvetica, sans-serif';font-variant-ligatures:normal;font-variant-position:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-alternates:normal;font-variant-east-asian:normal;font-feature-settings:normal;font-variation-settings:normal;text-indent:0;text-align:center;text-decoration-line:none;text-decoration-style:solid;text-decoration-color:#000000;letter-spacing:normal;word-spacing:normal;text-transform:none;writing-mode:lr-tb;direction:ltr;text-orientation:mixed;dominant-baseline:auto;baseline-shift:baseline;white-space:pre;inline-size:189.137;display:inline;opacity:1;vector-effect:none;fill:#2f3336;fill-opacity:1;stroke:none;stroke-width:0.5;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:6.6, 6.6;stroke-dashoffset:0.88;stroke-opacity:1;-inkscape-stroke:none;marker-end:url(#arrow);stop-color:#000000;stop-opacity:1"
+     x="1636.2592"
+     y="850.57422"
+     id="text177"
+     transform="translate(267.07521,133.09761)"><tspan
+       x="1636.2592"
+       y="850.57422"
+       id="tspan72"><tspan
+         style="baseline-shift:baseline;white-space:normal;vector-effect:none;stop-color:#000000;stop-opacity:1"
+         id="tspan71">E.g., OOD proportion, </tspan></tspan><tspan
+       x="1636.2592"
+       y="866.70759"
+       id="tspan74"><tspan
+         style="baseline-shift:baseline;white-space:normal;vector-effect:none;stop-color:#000000;stop-opacity:1"
+         id="tspan73">median predicted deviation, </tspan></tspan><tspan
+       x="1636.2592"
+       y="882.84095"
+       id="tspan76"><tspan
+         style="baseline-shift:baseline;white-space:normal;vector-effect:none;stop-color:#000000;stop-opacity:1"
+         id="tspan75">sensitivity to analytical </tspan></tspan><tspan
+       x="1636.2592"
+       y="898.97431"
+       id="tspan78"><tspan
+         style="baseline-shift:baseline;white-space:normal;vector-effect:none;stop-color:#000000;stop-opacity:1"
+         id="tspan77">uncertainty, calibration-</tspan></tspan><tspan
+       x="1636.2592"
+       y="915.10767"
+       id="tspan80"><tspan
+         style="baseline-shift:baseline;white-space:normal;vector-effect:none;stop-color:#000000;stop-opacity:1"
+         id="tspan79">dataset P–T distribution</tspan></tspan></text>
+  <path
+     class="arrow"
+     d="m -286.26535,1089.4284 v -31.3932 h 461.98986 v -90.99835"
+     id="path79-0-4-2"
+     sodipodi:nodetypes="cccc"
+     style="font-variation-settings:normal;vector-effect:none;fill:none;fill-opacity:1;stroke:#2f3336;stroke-width:2.2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;-inkscape-stroke:none;marker-end:url(#arrow-80);stop-color:#000000" />
+  <text
+     xml:space="preserve"
+     style="font-size:26.6667px;font-family:Sans;-inkscape-font-specification:'Sans, Normal';fill:#9d6e14;stroke:#050505;stroke-width:1.88976"
+     x="664.67548"
+     y="580.495"
+     id="text4"><tspan
+       sodipodi:role="line"
+       id="tspan4"
+       x="664.67548"
+       y="580.495" /></text>
+  <metadata
+     id="metadata4">
+    <rdf:RDF>
+      <cc:Work
+         rdf:about="">
+        <dc:title>AIMS4PT_cpx workflow with prerequisite dependencies</dc:title>
+      </cc:Work>
+    </rdf:RDF>
+  </metadata>
+  <text
+     xml:space="preserve"
+     style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:17px;line-height:normal;font-family:Arial, Helvetica, sans-serif;-inkscape-font-specification:'Sans, Normal';font-variant-ligatures:normal;font-variant-position:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-alternates:normal;font-variant-east-asian:normal;font-feature-settings:normal;font-variation-settings:normal;text-indent:0;text-align:center;text-decoration-line:none;text-decoration-style:solid;text-decoration-color:#000000;letter-spacing:normal;word-spacing:normal;text-transform:none;writing-mode:lr-tb;direction:ltr;text-orientation:mixed;dominant-baseline:auto;baseline-shift:baseline;white-space:pre;opacity:1;vector-effect:none;fill:#1a1d20;fill-opacity:1;stroke:#050505;stroke-width:1;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;-inkscape-stroke:none"
+     x="1569.6162"
+     y="178.79552"
+     id="text33"><tspan
+       sodipodi:role="line"
+       id="tspan31"
+       x="1569.6162"
+       y="178.79552"
+       style="stroke:none">proceed to step b</tspan></text>
+</svg>
