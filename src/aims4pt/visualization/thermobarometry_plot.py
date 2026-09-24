@@ -17,6 +17,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from aims4pt.utils import normalize_column_names
+from aims4pt.toolkit_utils import wrap_text
 from aims4pt.visualization.plot_utils import get_subplot_shape
 
 
