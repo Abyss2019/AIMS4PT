@@ -217,7 +217,10 @@ class iterative_model(ModelManager):
         self.y_min = getattr(self.T_model, 'y_min', None) if T_P == 'T' else getattr(self.P_model, 'y_min', None)
         self.y_max = getattr(self.T_model, 'y_max', None) if T_P == 'T' else getattr(self.P_model, 'y_max', None)
 
-        self.initialize_model(self.X_cpx_training, self.X_liq_training)
+        self.initialize_model(
+            cpx_training_path=self.X_cpx_training,
+            liq_training_path=self.X_liq_training,
+        )
         self.rock_types = None # Not available yet.
 
 

@@ -415,7 +415,8 @@ class workflow_thermobarometry:
                     chosen_model[i] = model_names[j]
                     break
 
-        best_prediction = pd.Series(chosen_pred, index=prediction_df.index, name="Predicted_P_kbar")
+        prediction_name = "Predicted_T_C" if self.T_P == "T" else "Predicted_P_kbar"
+        best_prediction = pd.Series(chosen_pred, index=prediction_df.index, name=prediction_name)
         best_model_idx = pd.Series(chosen_model, index=prediction_df.index, name="Best_Model")
         self.best_model = best_model_idx
 

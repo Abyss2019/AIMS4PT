@@ -152,13 +152,17 @@ def calculate_cation_nO_basis(
 
 
 def cpx_calculation(X_cpx: CompositionsType) -> CompositionsType:
-    """Calculate clinopyroxene end-member components."""
+    """Calculate clinopyroxene end members, filling missing required oxides with zero."""
 
     X_cpx_df, original_type = _coerce_compositions(X_cpx)
 
     oxide_list = get_oxides_list(X_cpx_df.columns.tolist())
 
-    # Normalize column names
+    # Include every oxide read below so normalization can fill missing columns.
+    required_oxides = ["SiO2", "TiO2", "Al2O3", "FeO", "MnO", "MgO", "CaO", "Na2O", "Cr2O3"]
+    oxide_list = list(dict.fromkeys(oxide_list + required_oxides))
+
+    # Normalize column names and fill missing required oxides through the shared helper.
     X_cpx_df = normalize_column_names(X_cpx_df, oxide_list)
 
     X_cpx_6_oxide = calculate_cation_nO_basis(X_cpx_df, 6, oxide_list)

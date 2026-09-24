@@ -200,6 +200,13 @@ class BaseModelManager:
             pd.DataFrame: Formatted DataFrame.
         '''
         if self.standard_columns:
+            cpx_columns = [c for c in self.standard_columns if c.endswith("_cpx")]
+            liq_columns = [c for c in self.standard_columns if c.endswith("_liq")]
+            if cpx_columns and liq_columns:
+                # Normalize each phase separately to avoid matching liquid oxides to cpx.
+                cpx = normalize_column_names(X.filter(regex=r"(?i)_cpx$"), cpx_columns)
+                liq = normalize_column_names(X.filter(regex=r"(?i)_liq$"), liq_columns)
+                return pd.concat([cpx, liq], axis=1).reindex(columns=self.standard_columns)
             X = normalize_column_names(X, self.standard_columns)
 
         return X
@@ -241,7 +248,9 @@ class DatasetManager:
         if self.X_cpx_training is None:
             raise ValueError("No training dataset available.")
         if self.X_liq_training is not None and (not self.cpx_only or self.require_water):
-            X = pd.concat([self.X_cpx_training, self.X_liq_training], axis=1)
+            cpx = normalize_column_names(self.X_cpx_training, self.cpx_names)
+            liq = normalize_column_names(self.X_liq_training, self.liq_names)
+            return pd.concat([cpx, liq], axis=1).reindex(columns=self.standard_columns)
         else:
             X = self.X_cpx_training
         return normalize_column_names(X, self.standard_columns)
@@ -432,7 +441,8 @@ class FeatureManager:
         from aims4pt.visualization.mode_related_plot import plot_feature_importance
         import matplotlib.pyplot as plt
 
-        feature_importance_df = feature_importance_df or self.feature_importance_df
+        if feature_importance_df is None:
+            feature_importance_df = self.feature_importance_df
         if feature_importance_df is None:
             raise ValueError("Feature importance DataFrame is not available in the model.")
         colored_features = self.key_features if show_key_features else None

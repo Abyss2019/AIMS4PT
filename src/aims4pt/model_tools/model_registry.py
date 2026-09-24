@@ -15,6 +15,7 @@ ALL_MODELS_MODULES = [
     "aims4pt.model_tools.Agreda2024",
     "aims4pt.model_tools.Wang_21",
     "aims4pt.model_tools.Chicchi23",
+    "aims4pt.model_tools.Masotta13",
 ]
 
 
