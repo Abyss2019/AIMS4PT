@@ -12,7 +12,7 @@ This repository contains the code and supporting resources for **AIMS4PT_cpx**, 
 Built on the [graphical web interface](#Graphical-Web-Interface), AIMS4PT_cpx is distributed as a standalone application for Windows and macOS (implemented with [PyInstaller](https://www.pyinstaller.org/)). No command-line or python environment setup is required: simply download the appropriate installer, install the application, and launch it normally.
 
 
-Installers are published on the [releases page](https://github.com/aims4pt/aims4pt_cpx/releases) when available:
+Installers are published on the [releases page](https://github.com/Abyss2019/AIMS4PT/releases) when available:
 
 - **Windows 64-bit (x64):** `AIMS4PT_cpx-<version>-Windows-x64-Setup.exe`
 - **macOS Apple Silicon (arm64):** `AIMS4PT_cpx-<version>-macOS-arm64.dmg`
